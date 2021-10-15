@@ -1,7 +1,7 @@
 # make a local copy of original "./../../rtl/test_setups/neorv32_test_setup_bootloader.vhd " file
 # and modify the default clock frequency: set to 50MHz
-set shell_script "cp -f ./../../../rtl/test_setups/neorv32_test_setup_bootloader.vhd  . && sed -i 's/100000000/50000000/g' neorv32_test_setup_bootloader.vhd "
-exec sh -c $shell_script
+#set shell_script "cp -f ./../../../rtl/test_setups/neorv32_test_setup_bootloader.vhd  . && sed -i 's/100000000/50000000/g' neorv32_test_setup_bootloader.vhd "
+#exec sh -c $shell_script
 
 # Copyright (C) 2020  Intel Corporation. All rights reserved.
 # Your use of Intel Corporation's design tools, logic functions
