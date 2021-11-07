@@ -25,8 +25,8 @@ configuration and entity details and `create_project.tcl` for the according FPGA
 * Reset: via on-board button "KEY0"
 * GPIO output port `gpio_o` (8-bit) connected to the 8 green user LEDs ("LED7" - "LED0")
 * UART0 signals `uart0_txd_o` and `uart0_rxd_i` are connected to the 40-pin **GPIO_0** header
-  * `uart0_txd_o:` output, connected to FPGA pin `V12` - header pin `GPIO_tbd` (pin number "tbd")
-  * `uart0_rxd_i:` input, connected to FPGA pin `E8`   - header pin `GPIO_tbd` (pin number "tbd")
+  * `uart0_txd_o:` output, connected to FPGA pin `Y15` - header pin `GPIO_tbd` (pin number "tbd")
+  * `uart0_rxd_i:` input, connected to FPGA pin `AA11`   - header pin `GPIO_tbd` (pin number "tbd")
 
 
 ### FPGA Utilization
@@ -51,7 +51,6 @@ If not already available, this script will create a `work` folder in this direct
 4. execute `source create_project.tcl` - this will create and open the actual Quartus project in this folder
 5. copy paste the neorv32_test_setup_bootloader.vhd in this folder and change the frequency to 50 MHz
 6. double click on "Compile Design" in the "Tasks" window. This will synthesize, map and place & route your design and will also generate the actual FPGA bitstream
-
 7. when the process is done open the programmer (for example via "Tools/Programmer") and click "Start" in the programmer window to upload the bitstream to your FPGA
 8. use a serial terminal (like :earth_asia: [Tera Term](https://ttssh2.osdn.jp/index.html.en)) to connect to the USB-UART interface using the following configuration:
 19200 Baud, 8 data bits, 1 stop bit, no parity bits, no transmission / flow control protocol (raw bytes only), newline on `\r\n` (carriage return & newline)
@@ -61,4 +60,4 @@ and see section "Let's Get It Started" of the :page_facing_up: [NEORV32 data she
 
 ## Notes 
 
-only tested so far up and till point 6
+only tested so far up and till point 8
