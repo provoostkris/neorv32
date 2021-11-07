@@ -28,16 +28,17 @@ if {[is_project_open]} {
 
 # Make assignments
 if {$make_assignments} {
-  set_global_assignment -name FAMILY "Cyclone V"
-  set_global_assignment -name DEVICE 5CSEBA6U23I7
-  set_global_assignment -name TOP_LEVEL_ENTITY neorv32_test_setup_bootloader
-  set_global_assignment -name ORIGINAL_QUARTUS_VERSION 18.1.0
-  #set_global_assignment -name PROJECT_CREATION_TIME_DATE "16:40:53  APRIL 10, 2021"
-  #set_global_assignment -name LAST_QUARTUS_VERSION "18.1.0 Lite Edition"
-  set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
-  set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
-  set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
-  set_global_assignment -name ERROR_CHECK_FREQUENCY_DIVISOR 1
+
+	set_global_assignment -name FAMILY "Cyclone V"
+	set_global_assignment -name DEVICE 5CSEBA6U23I7
+	set_global_assignment -name TOP_LEVEL_ENTITY neorv32_test_setup_bootloader
+	set_global_assignment -name ORIGINAL_QUARTUS_VERSION 18.1.10
+	set_global_assignment -name PROJECT_CREATION_TIME_DATE "17:18:14  OCTOBER 31, 2021"
+	set_global_assignment -name LAST_QUARTUS_VERSION "18.1.0 Lite Edition"
+	set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+	set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+	set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
+	set_global_assignment -name ERROR_CHECK_FREQUENCY_DIVISOR 1
 
   # core VHDL files
   set core_src_dir [glob ./../../../rtl/core/*.vhd]
@@ -54,18 +55,34 @@ if {$make_assignments} {
   set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
   set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
 
-  set_location_assignment PIN_V11  -to clk_i
-  set_location_assignment PIN_W15  -to gpio_o[7]
+  set_location_assignment PIN_V11 -to clk_i
+  set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to clk_i
+
+  set_location_assignment PIN_AH17 -to rstn_i
+  set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to rstn_i
+
+  set_location_assignment PIN_W15 -to gpio_o[7]
   set_location_assignment PIN_AA24 -to gpio_o[6]
-  set_location_assignment PIN_V16  -to gpio_o[5]
-  set_location_assignment PIN_V15  -to gpio_o[4]
+  set_location_assignment PIN_V16 -to gpio_o[5]
+  set_location_assignment PIN_V15 -to gpio_o[4]
   set_location_assignment PIN_AF26 -to gpio_o[3]
   set_location_assignment PIN_AE26 -to gpio_o[2]
-  set_location_assignment PIN_Y16  -to gpio_o[1]
+  set_location_assignment PIN_Y16 -to gpio_o[1]
   set_location_assignment PIN_AA23 -to gpio_o[0]
-  set_location_assignment PIN_AH17 -to rstn_i
-  set_location_assignment PIN_V12  -to uart0_txd_o
-  set_location_assignment PIN_E8   -to uart0_rxd_i
+  set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to gpio_o[7]
+  set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to gpio_o[6]
+  set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to gpio_o[5]
+  set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to gpio_o[4]
+  set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to gpio_o[3]
+  set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to gpio_o[2]
+  set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to gpio_o[1]
+  set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to gpio_o[0]
+
+  set_location_assignment PIN_AA11 -to uart0_rxd_i
+  set_location_assignment PIN_Y15 -to uart0_txd_o
+  set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to uart0_rxd_i
+  set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to uart0_txd_o
+
 
   set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
 
