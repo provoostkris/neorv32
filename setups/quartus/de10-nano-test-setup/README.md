@@ -39,12 +39,12 @@ configuration and entity details and `create_project.tcl` for the according FPGA
 ### FPGA Utilization
 
 ```
-Logic utilization (in ALMs)	1,446 / 41,910 ( 3 % )
-Total registers	1745
+Logic utilization (in ALMs)	1,511 / 41,910 ( 4 % )
+Total registers	1818
 Total pins	12 / 314 ( 4 % )
 Total virtual pins	0
 Total block memory bits	296,960 / 5,662,720 ( 5 % )
-Total DSP Blocks	0 / 112 ( 0 % )
+Total DSP Blocks	3 / 112 ( 3 % )
 ```
 
 ## How To Run
