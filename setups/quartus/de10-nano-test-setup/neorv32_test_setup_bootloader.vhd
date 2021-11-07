@@ -75,6 +75,9 @@ begin
     CPU_EXTENSION_RISCV_C        => true,              -- implement compressed extension?
     CPU_EXTENSION_RISCV_M        => true,              -- implement mul/div extension?
     CPU_EXTENSION_RISCV_Zicsr    => true,              -- implement CSR system?
+    -- Extension Options --
+    FAST_MUL_EN                  => true,              -- use DSPs for M extension's multiplier
+    FAST_SHIFT_EN                => true,              -- use barrel shifter for shift operations
     -- Internal Instruction memory --
     MEM_INT_IMEM_EN              => true,              -- implement processor-internal instruction memory
     MEM_INT_IMEM_SIZE            => MEM_INT_IMEM_SIZE, -- size of processor-internal instruction memory in bytes
@@ -84,7 +87,8 @@ begin
     -- Processor peripherals --
     IO_GPIO_EN                   => true,              -- implement general purpose input/output port unit (GPIO)?
     IO_MTIME_EN                  => true,              -- implement machine system timer (MTIME)?
-    IO_UART0_EN                  => true               -- implement primary universal asynchronous receiver/transmitter (UART0)?
+    IO_UART0_EN                  => true,              -- implement primary universal asynchronous receiver/transmitter (UART0)?
+    IO_WDT_EN                    => true               -- implement watch dog timer (WDT)?
   )
   port map (
     -- Global control --
