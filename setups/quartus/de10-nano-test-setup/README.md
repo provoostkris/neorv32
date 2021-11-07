@@ -18,26 +18,33 @@ top entity that provides a minimalistic interface (clock, reset, UART and 8 LEDs
 configuration and entity details and `create_project.tcl` for the according FPGA pin mapping.
 
 * CPU: `rv32imcu_Zicsr` + 4 `HPM` (hardware performance monitors, 40-bit wide)
-* Memory: 16kB instruction memory (internal IMEM), 16kB data memory (internal DMEM), bootloader ROM
-* Peripherals: `GPIO`, `MTIME`, `UART0`, `WDT`
+* Memory: 
+  * 16kB instruction memory (internal IMEM)
+  * 16kB data memory (internal DMEM)
+  * bootloader ROM
+* Peripherals: 
+  *`GPIO`
+  *`MTIME`
+  *`UART0`
+  *`WDT`
 * Tested with version `1.5.9.9`
 * Clock: 50MHz from on-board oscillator
 * Reset: via on-board button "KEY0"
 * GPIO output port `gpio_o` (8-bit) connected to the 8 green user LEDs ("LED7" - "LED0")
 * UART0 signals `uart0_txd_o` and `uart0_rxd_i` are connected to the 40-pin **GPIO_0** header
-  * `uart0_txd_o:` output, connected to FPGA pin `Y15` - header pin `GPIO_tbd` (pin number "tbd")
-  * `uart0_rxd_i:` input, connected to FPGA pin `AA11`   - header pin `GPIO_tbd` (pin number "tbd")
+  * `uart0_txd_o:` output, connected to FPGA pin `Y15` - header pin `GPIO 0` (pin number "40")
+  * `uart0_rxd_i:` input, connected to FPGA pin `AA11`   - header pin `GPIO 1` (pin number "1")
 
 
 ### FPGA Utilization
 
 ```
-Logic utilization (in ALMs)	2,569 / 41,910 ( 6 % )
-Total registers	3128
-Total pins	31 / 314 ( 10 % )
+Logic utilization (in ALMs)	1,446 / 41,910 ( 3 % )
+Total registers	1745
+Total pins	12 / 314 ( 4 % )
 Total virtual pins	0
-Total block memory bits	298,080 / 5,662,720 ( 5 % )
-Total DSP Blocks	4 / 112 ( 4 % )
+Total block memory bits	296,960 / 5,662,720 ( 5 % )
+Total DSP Blocks	0 / 112 ( 0 % )
 ```
 
 ## How To Run
