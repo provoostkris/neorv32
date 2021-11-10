@@ -118,6 +118,7 @@ begin
     CPU_EXTENSION_RISCV_U        => CPU_EXTENSION_RISCV_U,         -- implement user mode extension?
     CPU_EXTENSION_RISCV_Zfinx    => CPU_EXTENSION_RISCV_Zfinx,     -- implement 32-bit floating-point extension (using INT regs!)
     CPU_EXTENSION_RISCV_Zicsr    => CPU_EXTENSION_RISCV_Zicsr,     -- implement CSR system?
+    CPU_EXTENSION_RISCV_Zicntr   => true,                          -- implement base counters?
     CPU_EXTENSION_RISCV_Zifencei => CPU_EXTENSION_RISCV_Zifencei,  -- implement instruction stream sync.?
 
     -- Extension Options --
@@ -237,7 +238,6 @@ begin
     mtime_o     => open,                         -- current system time from int. MTIME (if IO_MTIME_EN = true)
 
     -- Interrupts --
-    nm_irq_i    => '0',                          -- non-maskable interrupt
     mtime_irq_i => '0',                          -- machine timer interrupt, available if IO_MTIME_EN = false
     msw_irq_i   => '0',                          -- machine software interrupt
     mext_irq_i  => '0'                           -- machine external interrupt

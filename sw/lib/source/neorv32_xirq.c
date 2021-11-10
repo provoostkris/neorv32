@@ -34,7 +34,7 @@
 
 
 /**********************************************************************//**
- * @file neorv32_xirq.h
+ * @file neorv32_xirq.c
  * @author Stephan Nolting
  * @brief External Interrupt controller HW driver source file.
  **************************************************************************/
@@ -49,8 +49,8 @@
 static uint32_t __neorv32_xirq_vector_lut[32] __attribute__((unused)); // trap handler vector table
 
 // private functions
-static void __attribute__((aligned(16))) __attribute__((unused)) __neorv32_xirq_core(void);
-static void __attribute__((unused)) __neorv32_xirq_dummy_handler(void);
+static void __attribute__((aligned(16))) __neorv32_xirq_core(void);
+static void __neorv32_xirq_dummy_handler(void);
 
 
 /**********************************************************************//**
@@ -60,7 +60,7 @@ static void __attribute__((unused)) __neorv32_xirq_dummy_handler(void);
  **************************************************************************/
 int neorv32_xirq_available(void) {
 
-  if (SYSINFO_FEATURES & (1 << SYSINFO_FEATURES_IO_XIRQ)) {
+  if (NEORV32_SYSINFO.SOC & (1 << SYSINFO_SOC_IO_XIRQ)) {
     return 1;
   }
   else {
@@ -78,15 +78,15 @@ int neorv32_xirq_available(void) {
  **************************************************************************/
 int neorv32_xirq_setup(void) {
 
-  XIRQ_IER = 0; // disable all input channels
-  XIRQ_IPR = 0xffffffff; // clear/ack all pending IRQs
+  NEORV32_XIRQ.IER = 0; // disable all input channels
+  NEORV32_XIRQ.IPR = 0; // clear all pending IRQs
 
   int i;
   for (i=0; i<32; i++) {
     __neorv32_xirq_vector_lut[i] = (uint32_t)(&__neorv32_xirq_dummy_handler);
   }
 
-  // register XIRQ handler in RTE
+  // register XIRQ handler in NEORV32 RTE
   return neorv32_rte_exception_install(XIRQ_RTE_ID, __neorv32_xirq_core);
 }
 
@@ -124,8 +124,8 @@ int neorv32_xirq_get_num(void) {
   if (neorv32_xirq_available()) {
 
     neorv32_cpu_irq_disable(XIRQ_FIRQ_ENABLE); // make sure XIRQ cannot fire
-    XIRQ_IER = 0xffffffff; // try to set all enable flags
-    enable = XIRQ_IER; // read back actually set flags
+    NEORV32_XIRQ.IER = 0xffffffff; // try to set all enable flags
+    enable = NEORV32_XIRQ.IER; // read back actually set flags
 
     // count set bits in enable
     cnt = 0;
@@ -139,6 +139,45 @@ int neorv32_xirq_get_num(void) {
   }
   else {
     return 0;
+  }
+}
+
+
+/**********************************************************************//**
+ * Clear pending interrupt.
+ *
+ * @param[in] ch XIRQ interrupt channel (0..31).
+ **************************************************************************/
+void neorv32_xirq_clear_pending(uint8_t ch) {
+
+  if (ch < 32) { // channel valid?
+    NEORV32_XIRQ.IPR = ~(1 << ch);
+  }
+}
+
+
+/**********************************************************************//**
+ * Enable IRQ channel.
+ *
+ * @param[in] ch XIRQ interrupt channel (0..31).
+ **************************************************************************/
+void neorv32_xirq_channel_enable(uint8_t ch) {
+
+  if (ch < 32) { // channel valid?
+    NEORV32_XIRQ.IER |= 1 << ch;
+  }
+}
+
+
+/**********************************************************************//**
+ * Disable IRQ channel.
+ *
+ * @param[in] ch XIRQ interrupt channel (0..31).
+ **************************************************************************/
+void neorv32_xirq_channel_disable(uint8_t ch) {
+
+  if (ch < 32) { // channel valid?
+    NEORV32_XIRQ.IER &= ~(1 << ch);
   }
 }
 
@@ -158,8 +197,8 @@ int neorv32_xirq_install(uint8_t ch, void (*handler)(void)) {
   if (ch < 32) {
     __neorv32_xirq_vector_lut[ch] = (uint32_t)handler; // install handler
     uint32_t mask = 1 << ch;
-    XIRQ_IPR = mask; // clear if pending
-    XIRQ_IER |= mask; // enable channel
+    NEORV32_XIRQ.IPR = ~mask; // clear if pending
+    NEORV32_XIRQ.IER |= mask; // enable channel
     return 0;
   }
   return 1; 
@@ -180,8 +219,8 @@ int neorv32_xirq_uninstall(uint8_t ch) {
   if (ch < 32) {
     __neorv32_xirq_vector_lut[ch] = (uint32_t)(&__neorv32_xirq_dummy_handler); // override using dummy handler
     uint32_t mask = 1 << ch;
-    XIRQ_IER &= ~mask; // disable channel
-    XIRQ_IPR = mask; // clear if pending
+    NEORV32_XIRQ.IER &= ~mask; // disable channel
+    NEORV32_XIRQ.IPR = ~mask; // clear if pending
     return 0;
   }
   return 1; 
@@ -189,17 +228,16 @@ int neorv32_xirq_uninstall(uint8_t ch) {
 
 
 /**********************************************************************//**
- * This is the actual second-level IRQ handler for the XIRQ. It will call the previously installed handler
- * if an XIRQ fires.
- *
- * @note This function must no be used by the user.
+ * This is the actual second-level (F)IRQ handler for the XIRQ. It will
+ * call the previously installed handler if an XIRQ fires.
  **************************************************************************/
-static void __attribute__((aligned(16))) __attribute__((unused)) __neorv32_xirq_core(void) {
+static void __attribute__((aligned(16))) __neorv32_xirq_core(void) {
 
-  register uint32_t src = XIRQ_SCR; // get IRQ source (with highest priority)
-  src &= 0x1f;
+  register uint32_t src = NEORV32_XIRQ.SCR; // get IRQ source (with highest priority)
 
-  XIRQ_IPR = (uint32_t)(1 << src); // acknowledge pending interrupt
+  uint32_t mask = 1 << src;
+  NEORV32_XIRQ.IPR = ~mask; // clear current pending interrupt
+  NEORV32_XIRQ.SCR = 0; // acknowledge current interrupt (CPU FIRQ)
 
   // execute handler
   register uint32_t xirq_handler = __neorv32_xirq_vector_lut[src];
@@ -212,7 +250,7 @@ static void __attribute__((aligned(16))) __attribute__((unused)) __neorv32_xirq_
 /**********************************************************************//**
  * XIRQ dummy handler.
  **************************************************************************/
-static void __attribute__((unused)) __neorv32_xirq_dummy_handler(void) {
+static void __neorv32_xirq_dummy_handler(void) {
 
   asm volatile ("nop");
 }

@@ -44,8 +44,8 @@ use neorv32.neorv32_package.all;
 entity neorv32_cpu_alu is
   generic (
     -- RISC-V CPU Extensions --
+    CPU_EXTENSION_RISCV_B     : boolean; -- implement bit-manipulation extension?
     CPU_EXTENSION_RISCV_M     : boolean; -- implement mul/div extension?
-    CPU_EXTENSION_RISCV_Zbb   : boolean; -- implement basic bit-manipulation sub-extension?
     CPU_EXTENSION_RISCV_Zmmul : boolean; -- implement multiply-only M sub-extension?
     CPU_EXTENSION_RISCV_Zfinx : boolean; -- implement 32-bit floating-point extension (using INT reg!)
     -- Extension Options --
@@ -63,8 +63,8 @@ entity neorv32_cpu_alu is
     pc2_i       : in  std_ulogic_vector(data_width_c-1 downto 0); -- delayed PC
     imm_i       : in  std_ulogic_vector(data_width_c-1 downto 0); -- immediate
     csr_i       : in  std_ulogic_vector(data_width_c-1 downto 0); -- CSR read data
-    cmp_i       : in  std_ulogic_vector(1 downto 0); -- comparator status
     -- data output --
+    cmp_o       : out std_ulogic_vector(1 downto 0); -- comparator status
     res_o       : out std_ulogic_vector(data_width_c-1 downto 0); -- ALU result
     add_o       : out std_ulogic_vector(data_width_c-1 downto 0); -- address computation result
     fpu_flags_o : out std_ulogic_vector(4 downto 0); -- FPU exception flags
@@ -74,6 +74,11 @@ entity neorv32_cpu_alu is
 end neorv32_cpu_alu;
 
 architecture neorv32_cpu_cpu_rtl of neorv32_cpu_alu is
+
+  -- comparator --
+  signal cmp_opx : std_ulogic_vector(data_width_c downto 0);
+  signal cmp_opy : std_ulogic_vector(data_width_c downto 0);
+  signal cmp     : std_ulogic_vector(1 downto 0); -- comparator status
 
   -- operands --
   signal opa, opb : std_ulogic_vector(data_width_c-1 downto 0);
@@ -102,7 +107,17 @@ architecture neorv32_cpu_cpu_rtl of neorv32_cpu_alu is
 
 begin
 
-  -- Operand Mux ----------------------------------------------------------------------------
+  -- Comparator Unit (for conditional branches) ---------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  cmp_opx <= (rs1_i(rs1_i'left) and (not ctrl_i(ctrl_alu_unsigned_c))) & rs1_i;
+  cmp_opy <= (rs2_i(rs2_i'left) and (not ctrl_i(ctrl_alu_unsigned_c))) & rs2_i;
+
+  cmp(cmp_equal_c) <= '1' when (rs1_i = rs2_i) else '0';
+  cmp(cmp_less_c)  <= '1' when (signed(cmp_opx) < signed(cmp_opy)) else '0';
+  cmp_o            <= cmp;
+
+
+  -- ALU Input Operand Mux ------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   opa <= pc2_i when (ctrl_i(ctrl_alu_opa_mux_c) = '1') else rs1_i; -- operand a (first ALU input operand), only required for arithmetic ops
   opb <= imm_i when (ctrl_i(ctrl_alu_opb_mux_c) = '1') else rs2_i; -- operand b (second ALU input operand)
@@ -228,24 +243,23 @@ begin
 
   -- Co-Processor 0: Shifter (CPU Core ISA) --------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-    neorv32_cpu_cp_shifter_inst: neorv32_cpu_cp_shifter
-    generic map (
-      FAST_SHIFT_EN => FAST_SHIFT_EN -- use barrel shifter for shift operations
-    )
-    port map (
-      -- global control --
-      clk_i   => clk_i,           -- global clock, rising edge
-      rstn_i  => rstn_i,          -- global reset, low-active, async
-      ctrl_i  => ctrl_i,          -- main control bus
-      start_i => cp_start(0),     -- trigger operation
-      -- data input --
-      rs1_i   => rs1_i,           -- rf source 1
-      rs2_i   => rs2_i,           -- rf source 2
-      imm_i   => imm_i,           -- immediate
-      -- result and status --
-      res_o   => cp_result(0),    -- operation result
-      valid_o => cp_valid(0)      -- data output valid
-    );
+  neorv32_cpu_cp_shifter_inst: neorv32_cpu_cp_shifter
+  generic map (
+    FAST_SHIFT_EN => FAST_SHIFT_EN -- use barrel shifter for shift operations
+  )
+  port map (
+    -- global control --
+    clk_i   => clk_i,           -- global clock, rising edge
+    rstn_i  => rstn_i,          -- global reset, low-active, async
+    ctrl_i  => ctrl_i,          -- main control bus
+    start_i => cp_start(0),     -- trigger operation
+    -- data input --
+    rs1_i   => rs1_i,           -- rf source 1
+    shamt_i => opb(index_size_f(data_width_c)-1 downto 0), -- shift amount
+    -- result and status --
+    res_o   => cp_result(0),    -- operation result
+    valid_o => cp_valid(0)      -- data output valid
+  );
 
 
   -- Co-Processor 1: Integer Multiplication/Division ('M' Extension) ------------------------
@@ -259,16 +273,16 @@ begin
     )
     port map (
       -- global control --
-      clk_i   => clk_i,           -- global clock, rising edge
-      rstn_i  => rstn_i,          -- global reset, low-active, async
-      ctrl_i  => ctrl_i,          -- main control bus
-      start_i => cp_start(1),     -- trigger operation
+      clk_i   => clk_i,         -- global clock, rising edge
+      rstn_i  => rstn_i,        -- global reset, low-active, async
+      ctrl_i  => ctrl_i,        -- main control bus
+      start_i => cp_start(1),   -- trigger operation
       -- data input --
-      rs1_i   => rs1_i,           -- rf source 1
-      rs2_i   => rs2_i,           -- rf source 2
+      rs1_i   => rs1_i,         -- rf source 1
+      rs2_i   => rs2_i,         -- rf source 2
       -- result and status --
-      res_o   => cp_result(1),    -- operation result
-      valid_o => cp_valid(1)      -- data output valid
+      res_o   => cp_result(1),  -- operation result
+      valid_o => cp_valid(1)    -- data output valid
     );
   end generate;
 
@@ -279,32 +293,33 @@ begin
   end generate;
 
 
-  -- Co-Processor 2: Bit-Manipulation Unit ('Zbb' Extension) --------------------------------
+  -- Co-Processor 2: Bit-Manipulation Unit ('B' Extension) ----------------------------------
   -- -------------------------------------------------------------------------------------------
   neorv32_cpu_cp_bitmanip_inst_true:
-  if (CPU_EXTENSION_RISCV_Zbb = true) generate
+  if (CPU_EXTENSION_RISCV_B = true) generate
     neorv32_cpu_cp_bitmanip_inst: neorv32_cpu_cp_bitmanip
     generic map (
       FAST_SHIFT_EN => FAST_SHIFT_EN -- use barrel shifter for shift operations
     )
     port map (
       -- global control --
-      clk_i    => clk_i,        -- global clock, rising edge
-      rstn_i   => rstn_i,       -- global reset, low-active, async
-      ctrl_i   => ctrl_i,       -- main control bus
-      start_i  => cp_start(2),  -- trigger operation
+      clk_i   => clk_i,        -- global clock, rising edge
+      rstn_i  => rstn_i,       -- global reset, low-active, async
+      ctrl_i  => ctrl_i,       -- main control bus
+      start_i => cp_start(2),  -- trigger operation
       -- data input --
-      cmp_i    => cmp_i,        -- comparator status
-      rs1_i    => rs1_i,        -- rf source 1
-      rs2_i    => rs2_i,        -- rf source 2
+      cmp_i   => cmp,          -- comparator status
+      rs1_i   => rs1_i,        -- rf source 1
+      rs2_i   => rs2_i,        -- rf source 2
+      shamt_i => opb(index_size_f(data_width_c)-1 downto 0), -- shift amount
       -- result and status --
-      res_o    => cp_result(2), -- operation result
-      valid_o  => cp_valid(2)   -- data output valid
+      res_o   => cp_result(2), -- operation result
+      valid_o => cp_valid(2)   -- data output valid
     );
   end generate;
 
   neorv32_cpu_cp_bitmanip_inst_false:
-  if (CPU_EXTENSION_RISCV_Zbb = false) generate
+  if (CPU_EXTENSION_RISCV_B = false) generate
     cp_result(2) <= (others => '0');
     cp_valid(2)  <= cp_start(2); -- to make sure CPU does not get stalled if there is an accidental access
   end generate;
@@ -317,12 +332,12 @@ begin
     neorv32_cpu_cp_fpu_inst: neorv32_cpu_cp_fpu
     port map (
       -- global control --
-      clk_i    => clk_i,        -- global clock, rising edge
+      clk_i    => clk_i,        -- global clock, rising edge  
       rstn_i   => rstn_i,       -- global reset, low-active, async
       ctrl_i   => ctrl_i,       -- main control bus
       start_i  => cp_start(3),  -- trigger operation
       -- data input --
-      cmp_i    => cmp_i,        -- comparator status
+      cmp_i    => cmp,          -- comparator status
       rs1_i    => rs1_i,        -- rf source 1
       rs2_i    => rs2_i,        -- rf source 2
       -- result and status --

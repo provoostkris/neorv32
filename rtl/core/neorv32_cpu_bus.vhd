@@ -175,7 +175,9 @@ begin
 
   -- Sanity Checks --------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  assert not (PMP_NUM_REGIONS > pmp_num_regions_critical_c) report "NEORV32 CPU CONFIG WARNING! Number of implemented PMP regions (PMP_NUM_REGIONS = " & integer'image(PMP_NUM_REGIONS) & ") beyond critical limit (pmp_num_regions_critical_c = " & integer'image(pmp_num_regions_critical_c) & "). Inserting another register stage (that will increase memory latency by +1 cycle)." severity warning;
+  assert not (PMP_NUM_REGIONS > pmp_num_regions_critical_c) report "NEORV32 CPU CONFIG WARNING! Number of implemented PMP regions (PMP_NUM_REGIONS = " &
+  integer'image(PMP_NUM_REGIONS) & ") beyond critical limit (pmp_num_regions_critical_c = " & integer'image(pmp_num_regions_critical_c) &
+  "). Inserting another register stage (that will increase memory latency by +1 cycle)." severity warning;
 
 
   -- Data Interface: Access Address ---------------------------------------------------------
@@ -387,7 +389,7 @@ begin
   excl_state_o <= exclusive_lock;
 
   -- output to memory system --
-  i_bus_lock_o <= '0'; -- instruction fetches cannot be lockes
+  i_bus_lock_o <= '0'; -- instruction fetches cannot be locked
   d_bus_lock_o <= exclusive_lock;
 
 
@@ -434,7 +436,7 @@ begin
   i_bus_fence_o <= ctrl_i(ctrl_bus_fencei_c);
   instr_o       <= i_bus_rdata_i;
 
-  -- check instruction access --
+  -- check instruction access address alignment --
   i_misaligned <= '0' when (CPU_EXTENSION_RISCV_C = true) else -- no alignment exceptions possible when using C-extension
                   '1' when (fetch_pc_i(1) = '1') else '0'; -- 32-bit accesses only
 

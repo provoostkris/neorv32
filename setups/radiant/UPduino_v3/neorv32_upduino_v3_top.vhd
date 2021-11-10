@@ -103,6 +103,8 @@ architecture neorv32_upduino_v3_top_rtl of neorv32_upduino_v3_top is
   signal con_spi_sdi : std_ulogic;
   signal con_spi_sdo : std_ulogic;
   signal con_spi_csn : std_ulogic_vector(07 downto 0);
+  signal con_gpio_i  : std_ulogic_vector(63 downto 0);
+  signal con_gpio_o  : std_ulogic_vector(63 downto 0);
 
   -- Misc --
   signal pwm_drive  : std_logic_vector(2 downto 0);
@@ -145,32 +147,19 @@ begin
     -- General --
     CLOCK_FREQUENCY              => f_clock_c,   -- clock frequency of clk_i in Hz
     HW_THREAD_ID                 => 0,           -- hardware thread id (32-bit)
-
-    -- On-Chip Debugger (OCD) --
-    ON_CHIP_DEBUGGER_EN          => false,       -- implement on-chip debugger
+    INT_BOOTLOADER_EN            => true,        -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
 
     -- RISC-V CPU Extensions --
     CPU_EXTENSION_RISCV_A        => true,        -- implement atomic extension?
     CPU_EXTENSION_RISCV_C        => true,        -- implement compressed extension?
-    CPU_EXTENSION_RISCV_E        => false,       -- implement embedded RF extension?
     CPU_EXTENSION_RISCV_M        => true,        -- implement mul/div extension?
-    CPU_EXTENSION_RISCV_U        => false,       -- implement user mode extension?
-    CPU_EXTENSION_RISCV_Zfinx    => false,       -- implement 32-bit floating-point extension (using INT regs!)
+    CPU_EXTENSION_RISCV_U        => true,        -- implement user mode extension?
     CPU_EXTENSION_RISCV_Zicsr    => true,        -- implement CSR system?
-    CPU_EXTENSION_RISCV_Zifencei => false,       -- implement instruction stream sync.?
+    CPU_EXTENSION_RISCV_Zicntr   => true,        -- implement base counters?
+    CPU_EXTENSION_RISCV_Zifencei => true,        -- implement instruction stream sync.?
 
     -- Extension Options --
-    FAST_MUL_EN                  => false,       -- use DSPs for M extension's multiplier
-    FAST_SHIFT_EN                => false,       -- use barrel shifter for shift operations
     CPU_CNT_WIDTH                => 34,          -- total width of CPU cycle and instret counters (0..64)
-
-    -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              => 0,           -- number of regions (0..64)
-    PMP_MIN_GRANULARITY          => 64*1024,     -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
-
-    -- Hardware Performance Monitors (HPM) --
-    HPM_NUM_CNTS                 => 0,           -- number of implemented HPM counters (0..29)
-    HPM_CNT_WIDTH                => 40,          -- total size of HPM counters (1..64)
 
     -- Internal Instruction memory --
     MEM_INT_IMEM_EN              => true,        -- implement processor-internal instruction memory
@@ -180,12 +169,6 @@ begin
     MEM_INT_DMEM_EN              => true,        -- implement processor-internal data memory
     MEM_INT_DMEM_SIZE            => 64*1024,     -- size of processor-internal data memory in bytes
 
-    -- Internal Cache memory --
-    ICACHE_EN                    => false,       -- implement instruction cache
-    ICACHE_NUM_BLOCKS            => 4,           -- i-cache: number of blocks (min 1), has to be a power of 2
-    ICACHE_BLOCK_SIZE            => 64,          -- i-cache: block size in bytes (min 4), has to be a power of 2
-    ICACHE_ASSOCIATIVITY         => 1,           -- i-cache: associativity / number of sets (1=direct_mapped), has to be a power of 2
-
     -- Processor peripherals --
     IO_GPIO_EN                   => true,        -- implement general purpose input/output port unit (GPIO)?
     IO_MTIME_EN                  => true,        -- implement machine system timer (MTIME)?
@@ -193,7 +176,8 @@ begin
     IO_SPI_EN                    => true,        -- implement serial peripheral interface (SPI)?
     IO_TWI_EN                    => true,        -- implement two-wire interface (TWI)?
     IO_PWM_NUM_CH                => 3,           -- number of PWM channels to implement (0..60); 0 = disabled
-    IO_WDT_EN                    => true         -- implement watch dog timer (WDT)?
+    IO_WDT_EN                    => true,        -- implement watch dog timer (WDT)?
+    IO_TRNG_EN                   => true         -- implement true random number generator (TRNG)?
   )
   port map (
     -- Global control --
@@ -201,8 +185,8 @@ begin
     rstn_i      => cpu_rstn,                     -- global reset, low-active, async
 
     -- GPIO (available if IO_GPIO_EN = true) --
-    gpio_o      => gpio_o,                       -- parallel output
-    gpio_i      => gpio_i,                       -- parallel input
+    gpio_o      => con_gpio_o,                   -- parallel output
+    gpio_i      => con_gpio_i,                   -- parallel input
 
     -- primary UART0 (available if IO_UART0_EN = true) --
     uart0_txd_o => uart_txd_o,                    -- UART0 send data
@@ -222,6 +206,10 @@ begin
     pwm_o       => con_pwm                       -- pwm channels
   );
 
+  -- GPIO --
+  con_gpio_i <= x"000000000000000" & gpio_i(3 downto 0);
+  gpio_o(3 downto 0) <= con_gpio_o(3 downto 0);
+
   -- SPI --
   flash_sck_o <= con_spi_sck;
   flash_sdo_o <= con_spi_sdo;
@@ -232,10 +220,9 @@ begin
   con_spi_sdi <= flash_sdi_i when (con_spi_csn(0) = '0') else spi_sdi_i;
 
   -- RGB --
-  -- bit 0: red - pwm channel 0
-  -- bit 1: green - pwm channel 1
-  -- bit 2: blue - pwm channel 2
-  pwm_drive <= std_logic_vector(con_pwm(2 downto 0));
+  pwm_drive(0) <= std_logic(con_pwm(0) or con_gpio_o(0)); -- bit 0: red - pwm channel 0 OR gpio_o(0) [status LED]
+  pwm_drive(1) <= std_logic(con_pwm(1)); -- bit 1: green - pwm channel 1
+  pwm_drive(2) <= std_logic(con_pwm(2)); -- bit 2: blue - pwm channel 2
 
   RGB_inst: RGB
   generic map (

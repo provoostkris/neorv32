@@ -64,16 +64,20 @@ files are currently part of the NEORV32 core library:
 | `neorv32_cfs.c`    | `neorv32_cfs.h`        | HW driver (stub)footnote:[This driver file only represents a stub, since the real CFS drivers are defined by the actual CFS implementation.] functions for the custom functions subsystem
 | `neorv32_cpu.c`    | `neorv32_cpu.h`        | HW driver functions for the NEORV32 **CPU**
 | `neorv32_gpio.c`   | `neorv32_gpio.h`       | HW driver functions for the **GPIO**
+| `neorv32_gptmr.c`  | `neorv32_gptmr.h`      | HW driver functions for the **GPTRM**
 | -                  | `neorv32_intrinsics.h` | macros for custom intrinsics/instructions
+| -                  | `neorv32_legacy.h`     | legacy back-compatibility layer
 | `neorv32_mtime.c`  | `neorv32_mtime.h`      | HW driver functions for the **MTIME**
 | `neorv32_neoled.c` | `neorv32_neoled.h`     | HW driver functions for the **NEOLED**
 | `neorv32_pwm.c`    | `neorv32_pwm.h`        | HW driver functions for the **PWM**
 | `neorv32_rte.c`    | `neorv32_rte.h`        | NEORV32 **runtime environment** and helpers
+| `neorv32_slink.c`  | `neorv32_slink.h`      | HW driver functions for the **SLINK**
 | `neorv32_spi.c`    | `neorv32_spi.h`        | HW driver functions for the **SPI**
 | `neorv32_trng.c`   | `neorv32_trng.h`       | HW driver functions for the **TRNG**
 | `neorv32_twi.c`    | `neorv32_twi.h`        | HW driver functions for the **TWI**
 | `neorv32_uart.c`   | `neorv32_uart.h`       | HW driver functions for the **UART0** and **UART1**
 | `neorv32_wdt.c`    | `neorv32_wdt.h`        | HW driver functions for the **WDT**
+| `neorv32_xirq.c`   | `neorv32_xirq.h`       | HW driver functions for the **XIRQ**
 |=======================
 
 .Documentation
@@ -123,12 +127,14 @@ Targets:
  info       - show makefile/toolchain configuration
  exe        - compile and generate <neorv32_exe.bin> executable for upload via bootloader
  hex        - compile and generate <neorv32_exe.hex> executable raw file
+ image      - compile and generate VHDL IMEM boot image (for application) in local folder
  install    - compile, generate and install VHDL IMEM boot image (for application)
- sim        - in-console simulation using the default testbench and GHDL
+ sim        - in-console simulation using default/simple testbench and GHDL
  all        - exe + hex + install
  elf_info   - show ELF layout info
  clean      - clean up project
  clean_all  - clean up project, core libraries and image generator
+ bl_image   - compile and generate VHDL BOOTROM boot image (for bootloader only!) in local folder
  bootloader - compile, generate and install VHDL BOOTROM boot image (for bootloader only!)
 ----
 
@@ -141,7 +147,7 @@ makefile (`sw/common/common.mk`):
 
 [TIP]
 The makefile configuration variables can be (re-)defined directly when invoking the makefile. For
-example via `$ make MARCH=-march=rv32ic clean_all exe`. You can also make project-specific definitions
+example via `$ make MARCH=rv32ic clean_all exe`. You can also make project-specific definitions
 of all variables inside the project's actual makefile (e.g., `sw/example/blink_led/makefile`).
 
 [source,makefile]
@@ -161,8 +167,8 @@ EFFORT ?= -Os
 # Compiler toolchain
 RISCV_PREFIX ?= riscv32-unknown-elf-
 # CPU architecture and ABI
-MARCH ?= -march=rv32i
-MABI  ?= -mabi=ilp32
+MARCH ?= rv32i
+MABI  ?= ilp32
 # User flags for additional configuration (will be added to compiler flags)
 USER_FLAGS ?=
 # Relative or absolute path to the NEORV32 home folder
@@ -178,7 +184,7 @@ NEORV32_HOME ?= ../../..
 | _ASM_INC_         | Include file folders that are used only for the assembly source files (`*.S`/`*.s`).
 | _EFFORT_          | Optimization level, optimize for size (`-Os`) is default; legal values: `-O0`, `-O1`, `-O2`, `-O3`, `-Os`
 | _RISCV_PREFIX_    | The toolchain prefix to be used; follows the naming convention "architecture-vendor-output-"
-| _MARCH_           | The targetd RISC-V architecture/ISA. Only `rv32` is supported by the NEORV32. Enable compiler support of optional CPU extension by adding the according extension letter (e.g. `rv32im` for _M_ CPU extension). See https://stnolting.github.io/neorv32/ug/#_enabling_risc_v_cpu_extensions[User Guide: Enabling RISC-V CPU Extensions] for more information.
+| _MARCH_           | The targeted RISC-V architecture/ISA. Only `rv32` is supported by the NEORV32. Enable compiler support of optional CPU extension by adding the according extension letter (e.g. `rv32im` for _M_ CPU extension). See https://stnolting.github.io/neorv32/ug/#_enabling_risc_v_cpu_extensions[User Guide: Enabling RISC-V CPU Extensions] for more information.
 | _MABI_            | The default 32-bit integer ABI.
 | _USER_FLAGS_      | Additional flags that will be forwarded to the compiler tools
 | _NEORV32_HOME_    | Relative or absolute path to the NEORV32 project home folder. Adapt this if the makefile/project is not in the project's `sw/example folder`.
@@ -201,7 +207,7 @@ The following default compiler flags are used for compiling an application. Thes
 | `-lm` | Include/link with `math.h`.
 | `-lc` | Search for the standard C library when linking.
 | `-lgcc` | Make sure we have no unresolved references to internal GCC library subroutines.
-| `-mno-fdiv` | Use builtin software functions for floating-point divisions and square roots (since the according instructions are not supported yet).
+| `-mno-fdiv` | Use built-in software functions for floating-point divisions and square roots (since the according instructions are not supported yet).
 | `-falign-functions=4` .4+| Force a 32-bit alignment of functions and labels (branch/jump/call targets). This increases performance as it simplifies instruction fetch when using the C extension. As a drawback this will also slightly increase the program code.
 | `-falign-labels=4`
 | `-falign-loops=4`
@@ -373,7 +379,7 @@ A simple `printf` can be used to inform the user when the application main funct
 ----
 int __neorv32_crt0_after_main(int32_t return_code) {
 
-  neorv32_uart_printf("Main returned with code: %i\n", return_code);
+  neorv32_uart0_printf("Main returned with code: %i\n", return_code);
   return 0;
 }
 ----
@@ -441,8 +447,8 @@ BLDV: Mar 23 2021
 HWV:  0x01050208
 CLK:  0x05F5E100
 MISA: 0x40901105
-ZEXT: 0x00000023
-PROC: 0x0EFF0037
+CPU:  0x00000023
+SOC:  0x0EFF0037
 IMEM: 0x00004000 bytes @ 0x00000000
 DMEM: 0x00002000 bytes @ 0x80000000
 
@@ -458,8 +464,8 @@ This start-up screen also gives some brief information about the bootloader and 
 | `HWV`  | Processor hardware version (from the `mimpid` CSR) in BCD format (example: `0x01040606` = v1.4.6.6).
 | `CLK`  | Processor clock speed in Hz (via the SYSINFO module, from the _CLOCK_FREQUENCY_ generic).
 | `MISA` | CPU extensions (from the `misa` CSR).
-| `ZEXT` | CPU sub-extensions (via the _SYSINFO_CPU_ register in the SYSINFO module)
-| `PROC` | Processor configuration (via the _SYSINFO_FEATURES_ register in the SYSINFO module / from the IO_* and MEM_* configuration generics).
+| `CPU`  | CPU sub-extensions (via the `CPU` register in the SYSINFO module)
+| `SOC`  | Processor configuration (via the `SOC` register in the SYSINFO module / from the IO_* and MEM_* configuration generics).
 | `IMEM` | IMEM memory base address and size in byte (from the _MEM_INT_IMEM_SIZE_ generic).
 | `DMEM` | DMEM memory base address and size in byte (from the _MEM_INT_DMEM_SIZE_ generic).
 |=======================
@@ -476,8 +482,8 @@ HWV:  0x01050208
 CLK:  0x05F5E100
 USER: 0x10000DE0
 MISA: 0x40901105
-ZEXT: 0x00000023
-PROC: 0x0EFF0037
+CPU:  0x00000023
+SOC:  0x0EFF0037
 IMEM: 0x00004000 bytes @ 0x00000000
 DMEM: 0x00002000 bytes @ 0x80000000
 
@@ -541,6 +547,7 @@ LED is permanently activated and the system must be manually reset.
 | **`ERROR_1`** | Your program is way too big for the internal processor’s instructions memory. Increase the memory size or reduce your application code.
 | **`ERROR_2`** | This indicates a checksum error. Something went wrong during the transfer of the program image (upload via UART or loading from the external SPI flash). If the error was caused by a UART upload, just try it again. When the error was generated during a flash access, the stored image might be corrupted.
 | **`ERROR_3`** | This error occurs if the attached SPI flash cannot be accessed. Make sure you have the right type of flash and that it is properly connected to the NEORV32 SPI port using chip select #0.
+| **`ERR 0x???????? 0x???????? 0x????????`** | The bootloader encountered an exception during operation. This might be caused when it tries to access peripherals that were not implemented during synthesis. Example: executing `l` or `s` (SPI flash operations) without the SPI module beeing implemented.
 |=======================
 
 
@@ -577,7 +584,7 @@ handlers.
 After the initial setup of the RTE, each entry in the trap handler's look-up table is initialized with a debug
 handler, that outputs detailed hardware information via the **primary UART (UART0)** when triggered. This
 is intended as a fall-back for debugging or for accidentally-triggered exceptions/interrupts.
-For instance, an illegal instruction exception catched by the RTE debug handler might look like this in the UART0 output:
+For instance, an illegal instruction exception caught by the RTE debug handler might look like this in the UART0 output:
 
 [source]
 ----

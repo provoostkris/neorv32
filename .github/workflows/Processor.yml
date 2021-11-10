@@ -31,15 +31,15 @@ jobs:
     - name: '🧰 Repository Checkout'
       uses: actions/checkout@v2
 
-    - name: '🚧 Run Software Framework Tests'
+    - name: '⚙️ Build Software Framework Tests'
       uses: docker://ghcr.io/stnolting/neorv32/sim
       with:
-        args: ./sw/example/processor_check/check.sh
+        args: ./do.py BuildAndInstallSoftwareFrameworkTests
 
     - name: '🚧 Run Processor Hardware Tests with shell script'
       uses: docker://ghcr.io/stnolting/neorv32/sim
       with:
-        args: ./sim/ghdl.sh
+        args: ./sim/simple/ghdl.sh
 
 
   VUnit-Container:
@@ -60,7 +60,7 @@ jobs:
           USER_FLAGS+=-DRUN_CHECK
           USER_FLAGS+=-DUART0_SIM_MODE
           USER_FLAGS+=-DSUPPRESS_OPTIONAL_UART_PRINT
-          MARCH=-march=rv32imac
+          MARCH=rv32imac
           info
           all
 

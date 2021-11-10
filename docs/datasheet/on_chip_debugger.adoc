@@ -19,7 +19,9 @@ The NEORV32 OCD provides the following key features:
 .OCD Security Note
 [IMPORTANT]
 Access via the OCD is _always authenticated_ (`dmstatus.authenticated` == `1`). Hence, the
-_whole system_ can always be accessed via the on-chip debugger.
+_whole system_ can always be accessed via the on-chip debugger. Currently, there is no option
+to disable the OCD via software. The OCD can only be disabled by disabling implementation
+(setting _ON_CHIP_DEBUGGER_EN_ generic to _false_).
 
 [NOTE]
 The OCD requires additional resources for implementation and _might_ also increase the critical path resulting in less
@@ -352,15 +354,15 @@ hart's GPRs (abstract command register index `0x1000` - `0x101f`).
 [cols="^1,^2,<8"]
 [options="header",grid="rows"]
 |=======================
-| Bit   | Name [RISC-V]      | Description / required value
-| 31:24 | `cmdtype`          | `00000000` to indicate "access register" command
-| 23    | _reserved_         | reserved, has to be `0` when writing
-| 22:20 | `aarsize`          | `010` to indicate 32-bit accesses
-| 21    | `aarpostincrement` | `0`, postincrement is not supported
-| 18    | `postexec`         | if set the program buffer is executed _after_ the command
-| 17    | `transfer`         | if set the operation in `write` is conducted
-| 16    | `write`            | `1`: copy `data0` to `[regno]`; `0` copy `[regno]` to `data0`
-| 15:0  | `regno`            | GPR-access only; has to be `0x1000` - `0x101f`
+| Bit   | Name [RISC-V]      | R/W | Description / required value
+| 31:24 | `cmdtype`          | -/w | `00000000` to indicate "access register" command
+| 23    | _reserved_         | -/w | reserved, has to be `0` when writing
+| 22:20 | `aarsize`          | -/w | `010` to indicate 32-bit accesses
+| 21    | `aarpostincrement` | -/w | `0`, post-increment is not supported
+| 18    | `postexec`         | -/w | if set the program buffer is executed _after_ the command
+| 17    | `transfer`         | -/w | if set the operation in `write` is conducted
+| 16    | `write`            | -/w | `1`: copy `data0` to `[regno]`; `0` copy `[regno]` to `data0`
+| 15:0  | `regno`            | -/w | GPR-access only; has to be `0x1000` - `0x101f`
 |=======================
 
 
@@ -490,9 +492,16 @@ When enabled, three additional CSRs are available (section <<_cpu_debug_mode_csr
 instruction `dret` is available when the CPU is "in" debug mode.
 
 [IMPORTANT]
-The CPU _debug mode_ requires the `Zicsr` CPU extension to be implemented (top generic _CPU_EXTENSION_RISCV_Zicsr_ = true).
+The CPU _debug mode_ requires the `Zicsr` and `Zifencei` CPU extension to be implemented (top generics _CPU_EXTENSION_RISCV_Zicsr_
+and _CPU_EXTENSION_RISCV_Zifencei_ = true).
 
-The CPU debug mode is entered when one of the following events appear:
+.Hardware Watchpoints and Breakpoints
+[NOTE]
+The NEORV32 CPU _debug mode_ does not provide a hardware "trigger module" (which is optional in the RISC-V debug spec). However, gdb
+provides a native _emulation_ for code (breakpoints using `break` instruction) and data (polling data watchpoints in automated
+single-stepping) triggers.
+
+The CPU debug-mode is entered when one of the following events appear:
 
 [start=1]
 . executing `ebreak` instruction (when `dcsr.ebreakm` is set and in machine mode OR when `dcsr.ebreaku` is set and in user mode)
@@ -502,7 +511,13 @@ The CPU debug mode is entered when one of the following events appear:
 From a hardware point of view, these "entry conditions" are special synchronous (`ebreak` instruction) or asynchronous
 (single-stepping "interrupt"; halt request "interrupt") traps, that are handled invisibly by the control logic.
 
-Whenever the CPU **enters debug mode** it performs the following operations:
+.WFI instruction
+[WARNING]
+The wait-for-interrupt instruction `wfi` puts the CPU into sleep mode. The CPU will resume normale operation
+when at least one interrupt source becomes pending (= at least one bit in `mip` CSR is set).
+However, the CPU will _also resume_ from sleep mode if there is a halt request from the debug module (DM).
+
+Whenever the CPU **enters debug-mode** it performs the following operations:
 
 * move `pc` to `dpcs`
 * copy the hart's current privilege level to `dcsr.prv`
@@ -510,16 +525,17 @@ Whenever the CPU **enters debug mode** it performs the following operations:
 * **no update** of `mtval`, `mcause`, `mtval` and `mstatus` CSRs
 * load the address configured via the CPU _CPU_DEBUG_ADDR_ generic to the `pc` to jump to "debugger park loop" code in the debug module (DM)
 
-When the CPU **is in debug mode** the following things are important:
+When the CPU **is in debug-mode** the following things are important:
 
 * while in debug mode, the CPU executes the parking loop and the program buffer provided by the DM if requested
-* effective CPU privilege level is `machine` mode, PMP is not active
-* if an exception occurs
-  * if the exception was caused by any debug-mode entry action the CPU jumps to the _normal entry point_
-    ( = _CPU_DEBUG_ADDR_) of the park loop again (for example when executing `ebreak` in debug mode)
-  * for all other exception sources the CPU jumps to the _exception entry point_ ( = _CPU_DEBUG_ADDR_ + 4)
-    to signal an exception to the DM and restarts the park loop again afterwards
-* interrupts _including_ non-maskable interrupts are disabled; however, they will be buffered and executed when the CPU has left debug mode
+* effective CPU privilege level is `machine` mode, any PMP configuration is bypassed
+* the `wfi` instruction acts as a `nop` (also during single-stepping)
+* if an exception occurs:
+** if the exception was caused by any debug-mode entry action the CPU jumps to the _normal entry point_
+   (= _CPU_DEBUG_ADDR_) of the park loop again (for example when executing `ebreak` _in_ debug-mode)
+** for all other exception sources the CPU jumps to the _exception entry point_ ( = _CPU_DEBUG_ADDR_ + 4)
+   to signal an exception to the DM and restarts the park loop again afterwards
+* interrupts are disabled; however, they will remain pending and will get executed after the CPU has left debug mode
 * if the DM makes a resume request, the park loop exits and the CPU leaves debug mode (executing `dret`)
 
 Debug mode is left either by executing the `dret` instruction footnote:[`dret` should only be executed _inside_ the debugger
@@ -569,13 +585,13 @@ The following bits are implemented. The reaming bits are read-only and always re
 | 14    | [line-through]#`ebereakh`# | r/- | `0` - hypervisor mode not supported
 | 13    | [line-through]#`ebereaks`# | r/- | `0` - supervisor mode not supported
 | 12    | `ebereaku`  | r/w | `ebreak` instructions in `user` mode will _enter_ debug mode when set
-| 11    | [line-through]#`stepie`# | r/- | `0` - IRQs are disabled during single-stepping
+| 11    | [line-through]#`stepie`#    | r/- | `0` - IRQs are disabled during single-stepping
 | 10    | [line-through]#`stopcount`# | r/- | `0` - counters increment as usual
 | 9     | [line-through]#`stoptime`#  | r/- | `0` - timers increment as usual
-| 8:6   | `cause`     | r/- | cause identifier - why was debug mode entered
+| 8:6   | `cause`     | r/- | cause identifier - why debug mode was entered
 | 5     | -           | r/- | _reserved_, read as zero
-| 4     | `mprven`    | r/- | `0` - `mstatus.mprv` is ignored when in debug mode
-| 3     | `nmip`      | r/- | set when the non-maskable CPU/processor interrupt is pending
+| 4     | [line-through]#`mprven`# | r/- | `0` - `mstatus.mprv` is ignored when in debug mode
+| 3     | [line-through]#`nmip`#   | r/- | `0` - non-maskable interrupt is pending
 | 2     | `step`      | r/w | enable single-stepping when set
 | 1:0   | `prv`       | r/w | CPU privilege level before/after debug mode
 |=======================

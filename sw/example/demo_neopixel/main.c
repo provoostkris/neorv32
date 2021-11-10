@@ -75,12 +75,12 @@ int main() {
 
 
   // setup UART0 at default baud rate, no parity bits, no hw flow control
-  neorv32_uart_setup(BAUD_RATE, PARITY_NONE, FLOW_CONTROL_NONE);
+  neorv32_uart0_setup(BAUD_RATE, PARITY_NONE, FLOW_CONTROL_NONE);
 
 
   // check if NEOLED unit is implemented at all, abort if not
   if (neorv32_neoled_available() == 0) {
-    neorv32_uart_printf("Error! No NEOLED unit synthesized!\n");
+    neorv32_uart0_printf("Error! No NEOLED unit synthesized!\n");
     return 1;
   }
 
@@ -102,7 +102,7 @@ int main() {
   // check NEOLED configuration
   neorv32_uart0_printf("Checking NEOLED configuration:\n"
                        " Hardware FIFO size: %u entries\n"
-                       " Control register:   0x%x\n\n", neorv32_neoled_get_buffer_size(), NEOLED_CT);
+                       " Control register:   0x%x\n\n", neorv32_neoled_get_buffer_size(), NEORV32_NEOLED.CTRL);
 
 
   // clear all LEDs
