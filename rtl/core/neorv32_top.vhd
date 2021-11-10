@@ -1,10 +1,6 @@
 -- #################################################################################################
--- # << NEORV32 - Processor Top Entity >>                                                          #
+-- # << The NEORV32 RISC-V Processor - Top Entity >>                                               #
 -- # ********************************************************************************************* #
--- # This is the top entity of the NEORV32 PROCESSOR. Instantiate this unit in your own project    #
--- # and define all the configuration generics according to your needs or use one of the           #
--- # pre-defined template wrappers.                                                                #
--- #                                                                                               #
 -- # Check out the processor's online documentation for more information:                          #
 -- #  HQ:         https://github.com/stnolting/neorv32                                             #
 -- #  Data Sheet: https://stnolting.github.io/neorv32                                              #
@@ -60,13 +56,15 @@ entity neorv32_top is
 
     -- RISC-V CPU Extensions --
     CPU_EXTENSION_RISCV_A        : boolean := false;  -- implement atomic extension?
+    CPU_EXTENSION_RISCV_B        : boolean := false;  -- implement bit-manipulation extension?
     CPU_EXTENSION_RISCV_C        : boolean := false;  -- implement compressed extension?
     CPU_EXTENSION_RISCV_E        : boolean := false;  -- implement embedded RF extension?
     CPU_EXTENSION_RISCV_M        : boolean := false;  -- implement mul/div extension?
     CPU_EXTENSION_RISCV_U        : boolean := false;  -- implement user mode extension?
-    CPU_EXTENSION_RISCV_Zbb      : boolean := false;  -- implement basic bit-manipulation sub-extension?
     CPU_EXTENSION_RISCV_Zfinx    : boolean := false;  -- implement 32-bit floating-point extension (using INT regs!)
     CPU_EXTENSION_RISCV_Zicsr    : boolean := true;   -- implement CSR system?
+    CPU_EXTENSION_RISCV_Zicntr   : boolean := true;   -- implement base counters?
+    CPU_EXTENSION_RISCV_Zihpm    : boolean := false;  -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei : boolean := false;  -- implement instruction stream sync.?
     CPU_EXTENSION_RISCV_Zmmul    : boolean := false;  -- implement multiply-only M sub-extension?
 
@@ -120,7 +118,11 @@ entity neorv32_top is
     IO_GPIO_EN                   : boolean := false;  -- implement general purpose input/output port unit (GPIO)?
     IO_MTIME_EN                  : boolean := false;  -- implement machine system timer (MTIME)?
     IO_UART0_EN                  : boolean := false;  -- implement primary universal asynchronous receiver/transmitter (UART0)?
+    IO_UART0_RX_FIFO             : natural := 1;      -- RX fifo depth, has to be a power of two, min 1
+    IO_UART0_TX_FIFO             : natural := 1;      -- TX fifo depth, has to be a power of two, min 1
     IO_UART1_EN                  : boolean := false;  -- implement secondary universal asynchronous receiver/transmitter (UART1)?
+    IO_UART1_RX_FIFO             : natural := 1;      -- RX fifo depth, has to be a power of two, min 1
+    IO_UART1_TX_FIFO             : natural := 1;      -- TX fifo depth, has to be a power of two, min 1
     IO_SPI_EN                    : boolean := false;  -- implement serial peripheral interface (SPI)?
     IO_TWI_EN                    : boolean := false;  -- implement two-wire interface (TWI)?
     IO_PWM_NUM_CH                : natural := 0;      -- number of PWM channels to implement (0..60); 0 = disabled
@@ -131,7 +133,8 @@ entity neorv32_top is
     IO_CFS_IN_SIZE               : positive := 32;    -- size of CFS input conduit in bits
     IO_CFS_OUT_SIZE              : positive := 32;    -- size of CFS output conduit in bits
     IO_NEOLED_EN                 : boolean := false;  -- implement NeoPixel-compatible smart LED interface (NEOLED)?
-    IO_NEOLED_TX_FIFO            : natural := 1       -- NEOLED TX FIFO depth, 1..32k, has to be a power of two
+    IO_NEOLED_TX_FIFO            : natural := 1;      -- NEOLED TX FIFO depth, 1..32k, has to be a power of two
+    IO_GPTMR_EN                  : boolean := false   -- implement general purpose timer (GPTMR)?
   );
   port (
     -- Global control --
@@ -216,7 +219,6 @@ entity neorv32_top is
     xirq_i         : in  std_ulogic_vector(XIRQ_NUM_CH-1 downto 0) := (others => 'L'); -- IRQ channels
 
     -- CPU interrupts --
-    nm_irq_i       : in  std_ulogic := 'L'; -- non-maskable interrupt
     mtime_irq_i    : in  std_ulogic := 'L'; -- machine timer interrupt, available if IO_MTIME_EN = false
     msw_irq_i      : in  std_ulogic := 'L'; -- machine software interrupt
     mext_irq_i     : in  std_ulogic := 'L'  -- machine external interrupt
@@ -245,7 +247,7 @@ architecture neorv32_top_rtl of neorv32_top is
   signal clk_div    : std_ulogic_vector(11 downto 0);
   signal clk_div_ff : std_ulogic_vector(11 downto 0);
   signal clk_gen    : std_ulogic_vector(07 downto 0);
-  signal clk_gen_en : std_ulogic_vector(07 downto 0);
+  signal clk_gen_en : std_ulogic_vector(08 downto 0);
   --
   signal wdt_cg_en    : std_ulogic;
   signal uart0_cg_en  : std_ulogic;
@@ -255,6 +257,7 @@ architecture neorv32_top_rtl of neorv32_top is
   signal pwm_cg_en    : std_ulogic;
   signal cfs_cg_en    : std_ulogic;
   signal neoled_cg_en : std_ulogic;
+  signal gptmr_cg_en  : std_ulogic;
 
   -- bus interface --
   type bus_interface_t is record
@@ -306,8 +309,8 @@ architecture neorv32_top_rtl of neorv32_top is
   constant resp_bus_entry_terminate_c : resp_bus_entry_t := (rdata => (others => '0'), ack => '0', err => '0');
 
   -- module response bus - device ID --
-  type resp_bus_id_t is (RESP_IMEM, RESP_DMEM, RESP_BOOTROM, RESP_WISHBONE, RESP_GPIO, RESP_MTIME, RESP_UART0, RESP_UART1, RESP_SPI,
-                         RESP_TWI, RESP_PWM, RESP_WDT, RESP_TRNG, RESP_CFS, RESP_NEOLED, RESP_SYSINFO, RESP_OCD, RESP_SLINK, RESP_XIRQ);
+  type resp_bus_id_t is (RESP_BUSKEEPER, RESP_IMEM, RESP_DMEM, RESP_BOOTROM, RESP_WISHBONE, RESP_GPIO, RESP_MTIME, RESP_UART0, RESP_UART1, RESP_SPI,
+                         RESP_TWI, RESP_PWM, RESP_WDT, RESP_TRNG, RESP_CFS, RESP_NEOLED, RESP_SYSINFO, RESP_OCD, RESP_SLINK, RESP_XIRQ, RESP_GPTMR);
 
   -- module response bus --
   type resp_bus_t is array (resp_bus_id_t) of resp_bus_entry_t;
@@ -328,17 +331,10 @@ architecture neorv32_top_rtl of neorv32_top is
   signal slink_tx_irq  : std_ulogic;
   signal slink_rx_irq  : std_ulogic;
   signal xirq_irq      : std_ulogic;
-
-  -- machine (CPU) interrupts --
-  signal x_nm_irq,    nm_irq_ff    : std_ulogic;
-  signal x_mtime_irq, mtime_irq_ff : std_ulogic;
-  signal x_msw_irq,   msw_irq_ff   : std_ulogic;
-  signal x_mext_irq,  mext_irq_ff  : std_ulogic;
+  signal gptmr_irq     : std_ulogic;
 
   -- misc --
-  signal mtime_time     : std_ulogic_vector(63 downto 0); -- current system time from MTIME
-  signal cpu_sleep      : std_ulogic; -- CPU is in sleep mode when set
-  signal bus_keeper_err : std_ulogic; -- bus keeper: bus access timeout
+  signal mtime_time : std_ulogic_vector(63 downto 0); -- current system time from MTIME
 
 begin
 
@@ -359,6 +355,7 @@ begin
   cond_sel_string_f(io_slink_en_c, "SLINK ", "") &
   cond_sel_string_f(IO_NEOLED_EN, "NEOLED ", "") &
   cond_sel_string_f(boolean(XIRQ_NUM_CH > 0), "XIRQ ", "") &
+  cond_sel_string_f(IO_GPTMR_EN, "GPTMR ", "") &
   ""
   severity note;
 
@@ -432,6 +429,7 @@ begin
       clk_gen_en(5) <= pwm_cg_en;
       clk_gen_en(6) <= cfs_cg_en;
       clk_gen_en(7) <= neoled_cg_en;
+      clk_gen_en(8) <= gptmr_cg_en;
       -- actual clock generator --
       if (or_reduce_f(clk_gen_en) = '1') then
         clk_div <= std_ulogic_vector(unsigned(clk_div) + 1);
@@ -460,13 +458,15 @@ begin
     CPU_DEBUG_ADDR               => dm_base_c,           -- cpu debug mode start address
     -- RISC-V CPU Extensions --
     CPU_EXTENSION_RISCV_A        => CPU_EXTENSION_RISCV_A,        -- implement atomic extension?
+    CPU_EXTENSION_RISCV_B        => CPU_EXTENSION_RISCV_B,        -- implement bit-manipulation extension?
     CPU_EXTENSION_RISCV_C        => CPU_EXTENSION_RISCV_C,        -- implement compressed extension?
     CPU_EXTENSION_RISCV_E        => CPU_EXTENSION_RISCV_E,        -- implement embedded RF extension?
     CPU_EXTENSION_RISCV_M        => CPU_EXTENSION_RISCV_M,        -- implement muld/div extension?
     CPU_EXTENSION_RISCV_U        => CPU_EXTENSION_RISCV_U,        -- implement user mode extension?
-    CPU_EXTENSION_RISCV_Zbb      => CPU_EXTENSION_RISCV_Zbb,      -- implement basic bit-manipulation sub-extension?
     CPU_EXTENSION_RISCV_Zfinx    => CPU_EXTENSION_RISCV_Zfinx,    -- implement 32-bit floating-point extension (using INT reg!)
     CPU_EXTENSION_RISCV_Zicsr    => CPU_EXTENSION_RISCV_Zicsr,    -- implement CSR system?
+    CPU_EXTENSION_RISCV_Zicntr   => CPU_EXTENSION_RISCV_Zicntr,   -- implement base counters?
+    CPU_EXTENSION_RISCV_Zihpm    => CPU_EXTENSION_RISCV_Zihpm,    -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei => CPU_EXTENSION_RISCV_Zifencei, -- implement instruction stream sync.?
     CPU_EXTENSION_RISCV_Zmmul    => CPU_EXTENSION_RISCV_Zmmul,    -- implement multiply-only M sub-extension?
     CPU_EXTENSION_RISCV_DEBUG    => ON_CHIP_DEBUGGER_EN,          -- implement CPU debug mode?
@@ -486,7 +486,7 @@ begin
     -- global control --
     clk_i          => clk_i,        -- global clock, rising edge
     rstn_i         => sys_rstn,     -- global reset, low-active, async
-    sleep_o        => cpu_sleep,    -- cpu is in sleep mode when set
+    sleep_o        => open,         -- cpu is in sleep mode when set
     -- instruction bus interface --
     i_bus_addr_o   => cpu_i.addr,   -- bus access address
     i_bus_rdata_i  => cpu_i.rdata,  -- bus read data
@@ -514,9 +514,8 @@ begin
     -- system time input from MTIME --
     time_i         => mtime_time,   -- current system time
     -- non-maskable interrupt --
-    nm_irq_i       => x_nm_irq,     -- NMI
-    msw_irq_i      => x_msw_irq,    -- machine software interrupt
-    mext_irq_i     => x_mext_irq,   -- machine external interrupt request
+    msw_irq_i      => msw_irq_i,    -- machine software interrupt
+    mext_irq_i     => mext_irq_i,   -- machine external interrupt request
     mtime_irq_i    => mtime_irq,    -- machine timer interrupt
     -- fast interrupts (custom) --
     firq_i         => fast_irq,     -- fast interrupt trigger
@@ -532,35 +531,25 @@ begin
   fence_o  <= cpu_d.fence; -- indicates an executed FENCE operation
   fencei_o <= cpu_i.fence; -- indicates an executed FENCEI operation
 
-  -- external machine-level (CPU) interrupts --
-  nm_irq_ff    <= nm_irq_i    when rising_edge(clk_i);
-  mtime_irq_ff <= mtime_irq_i when rising_edge(clk_i);
-  msw_irq_ff   <= msw_irq_i   when rising_edge(clk_i);
-  mext_irq_ff  <= mext_irq_i  when rising_edge(clk_i);
-  -- rising-edge detector --
-  x_nm_irq     <= nm_irq_i    and (not nm_irq_ff);
-  x_mtime_irq  <= mtime_irq_i and (not mtime_irq_ff);
-  x_msw_irq    <= msw_irq_i   and (not msw_irq_ff);
-  x_mext_irq   <= mext_irq_i  and (not mext_irq_ff);
-
-  -- fast interrupts --
-  fast_irq(00) <= wdt_irq;       -- HIGHEST PRIORITY - watchdog timeout
+  -- fast interrupt requests (FIRQs) --
+  -- these stay asserted until explicitly acknowledged --
+  fast_irq(00) <= wdt_irq;       -- HIGHEST PRIORITY - watchdog
   fast_irq(01) <= cfs_irq;       -- custom functions subsystem
-  fast_irq(02) <= uart0_rxd_irq; -- primary UART (UART0) data received
-  fast_irq(03) <= uart0_txd_irq; -- primary UART (UART0) sending done
-  fast_irq(04) <= uart1_rxd_irq; -- secondary UART (UART1) data received
-  fast_irq(05) <= uart1_txd_irq; -- secondary UART (UART1) sending done
-  fast_irq(06) <= spi_irq;       -- SPI transmission done
-  fast_irq(07) <= twi_irq;       -- TWI transmission done
+  fast_irq(02) <= uart0_rxd_irq; -- primary UART (UART0) RX
+  fast_irq(03) <= uart0_txd_irq; -- primary UART (UART0) TX
+  fast_irq(04) <= uart1_rxd_irq; -- secondary UART (UART1) RX
+  fast_irq(05) <= uart1_txd_irq; -- secondary UART (UART1) TX
+  fast_irq(06) <= spi_irq;       -- SPI
+  fast_irq(07) <= twi_irq;       -- TWI
   fast_irq(08) <= xirq_irq;      -- external interrupt controller
   fast_irq(09) <= neoled_irq;    -- NEOLED buffer free
-  fast_irq(10) <= slink_rx_irq;  -- SLINK data received
-  fast_irq(11) <= slink_tx_irq;  -- SLINK data send
+  fast_irq(10) <= slink_rx_irq;  -- SLINK RX
+  fast_irq(11) <= slink_tx_irq;  -- SLINK TX
+  fast_irq(12) <= gptmr_irq;     -- general purpose timer
   --
-  fast_irq(12) <= '0'; -- reserved
   fast_irq(13) <= '0'; -- reserved
   fast_irq(14) <= '0'; -- reserved
-  fast_irq(15) <= '0'; -- reserved
+  fast_irq(15) <= '0'; -- LOWEST PRIORITY - reserved
 
 
   -- CPU Instruction Cache ------------------------------------------------------------------
@@ -666,7 +655,7 @@ begin
   p_bus.fence <= cpu_d.fence or cpu_i.fence;
 
   -- bus response --
-  bus_response: process(resp_bus, bus_keeper_err)
+  bus_response: process(resp_bus)
     variable rdata_v : std_ulogic_vector(data_width_c-1 downto 0);
     variable ack_v   : std_ulogic;
     variable err_v   : std_ulogic;
@@ -681,11 +670,11 @@ begin
     end loop; -- i
     p_bus.rdata <= rdata_v; -- processor bus: CPU transfer data input
     p_bus.ack   <= ack_v;   -- processor bus: CPU transfer ACK input
-    p_bus.err   <= err_v or bus_keeper_err; -- processor bus: CPU transfer data bus error input
+    p_bus.err   <= err_v;   -- processor bus: CPU transfer data bus error input
   end process;
 
 
-  -- Processor-Internal Bus Keeper (BUS_KEEPER) ---------------------------------------------
+  -- Bus Keeper (BUSKEEPER) -----------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   neorv32_bus_keeper_inst: neorv32_bus_keeper
   generic map (
@@ -700,14 +689,20 @@ begin
   )
   port map (
     -- host access --
-    clk_i  => clk_i,         -- global clock line
-    rstn_i => sys_rstn,      -- global reset line, low-active
-    addr_i => p_bus.addr,    -- address
-    rden_i => p_bus.re,      -- read enable
-    wren_i => p_bus.we,      -- write enable
-    ack_i  => p_bus.ack,     -- transfer acknowledge from bus system
-    err_i  => p_bus.err,     -- transfer error from bus system
-    err_o  => bus_keeper_err -- bus error
+    clk_i      => clk_i,                          -- global clock line
+    rstn_i     => sys_rstn,                       -- global reset line, low-active, use as async
+    addr_i     => p_bus.addr,                     -- address
+    rden_i     => io_rden,                        -- read enable
+    wren_i     => io_wren,                        -- byte write enable
+    data_o     => resp_bus(RESP_BUSKEEPER).rdata, -- data out
+    ack_o      => resp_bus(RESP_BUSKEEPER).ack,   -- transfer acknowledge
+    err_o      => resp_bus(RESP_BUSKEEPER).err,   -- transfer error
+    -- bus monitoring --
+    bus_addr_i => p_bus.addr,                     -- address
+    bus_rden_i => p_bus.re,                       -- read enable
+    bus_wren_i => p_bus.we,                       -- write enable
+    bus_ack_i  => p_bus.ack,                      -- transfer acknowledge from bus system
+    bus_err_i  => p_bus.err                       -- transfer error from bus system
   );
 
 
@@ -887,8 +882,6 @@ begin
       -- clock generator --
       clkgen_en_o => cfs_cg_en,                -- enable clock generator
       clkgen_i    => clk_gen,                  -- "clock" inputs
-      -- CPU state --
-      sleep_i     => cpu_sleep,                -- set if cpu is in sleep mode
       -- interrupt --
       irq_o       => cfs_irq,                  -- interrupt request
       -- custom io (conduit) --
@@ -995,7 +988,7 @@ begin
   if (IO_MTIME_EN = false) generate
     resp_bus(RESP_MTIME) <= resp_bus_entry_terminate_c;
     mtime_time <= mtime_i; -- use external machine timer time signal
-    mtime_irq  <= x_mtime_irq; -- use external machine timer interrupt
+    mtime_irq  <= mtime_irq_i; -- use external machine timer interrupt
   end generate;
 
 
@@ -1025,7 +1018,9 @@ begin
   if (IO_UART0_EN = true) generate
     neorv32_uart0_inst: neorv32_uart
     generic map (
-      UART_PRIMARY => true -- true = primary UART (UART0), false = secondary UART (UART1)
+      UART_PRIMARY => true,             -- true = primary UART (UART0), false = secondary UART (UART1)
+      UART_RX_FIFO => IO_UART0_RX_FIFO, -- RX fifo depth, has to be a power of two, min 1
+      UART_TX_FIFO => IO_UART0_TX_FIFO  -- TX fifo depth, has to be a power of two, min 1
     )
     port map (
       -- host access --
@@ -1069,7 +1064,9 @@ begin
   if (IO_UART1_EN = true) generate
     neorv32_uart1_inst: neorv32_uart
     generic map (
-      UART_PRIMARY => false -- true = primary UART (UART0), false = secondary UART (UART1)
+      UART_PRIMARY => false,            -- true = primary UART (UART0), false = secondary UART (UART1)
+      UART_RX_FIFO => IO_UART1_RX_FIFO, -- RX fifo depth, has to be a power of two, min 1
+      UART_TX_FIFO => IO_UART1_TX_FIFO  -- TX fifo depth, has to be a power of two, min 1
     )
     port map (
       -- host access --
@@ -1175,8 +1172,8 @@ begin
   neorv32_twi_inst_false:
   if (IO_TWI_EN = false) generate
     resp_bus(RESP_TWI) <= resp_bus_entry_terminate_c;
---  twi_sda_io <= 'Z'; -- FIXME?
---  twi_scl_io <= 'Z'; -- FIXME?
+    twi_sda_io <= 'Z';
+    twi_scl_io <= 'Z';
     twi_cg_en  <= '0';
     twi_irq    <= '0';
   end generate;
@@ -1357,6 +1354,37 @@ begin
   end generate;
 
 
+  -- General Purpose Timer (GPTMR) ----------------------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  neorv32_gptmr_inst_true:
+  if (IO_GPTMR_EN = true) generate
+    neorv32_gptmr_inst: neorv32_gptmr
+    port map (
+      -- host access --
+      clk_i     => clk_i,                      -- global clock line
+      addr_i    => p_bus.addr,                 -- address
+      rden_i    => io_rden,                    -- read enable
+      wren_i    => io_wren,                    -- write enable
+      data_i    => p_bus.wdata,                -- data in
+      data_o    => resp_bus(RESP_GPTMR).rdata, -- data out
+      ack_o     => resp_bus(RESP_GPTMR).ack,   -- transfer acknowledge
+      -- clock generator --
+      clkgen_en_o => gptmr_cg_en,              -- enable clock generator
+      clkgen_i    => clk_gen,
+      -- interrupt --
+      irq_o       => gptmr_irq                 -- transmission done interrupt
+    );
+    resp_bus(RESP_GPTMR).err <= '0'; -- no access error possible
+  end generate;
+
+  neorv32_gptmr_inst_false:
+  if (IO_GPTMR_EN = false) generate
+    resp_bus(RESP_GPTMR) <= resp_bus_entry_terminate_c;
+    gptmr_cg_en          <= '0';
+    gptmr_irq            <= '0';
+  end generate;
+
+
   -- System Configuration Information Memory (SYSINFO) --------------------------------------
   -- -------------------------------------------------------------------------------------------
   neorv32_sysinfo_inst: neorv32_sysinfo
@@ -1365,9 +1393,10 @@ begin
     CLOCK_FREQUENCY              => CLOCK_FREQUENCY,      -- clock frequency of clk_i in Hz
     INT_BOOTLOADER_EN            => INT_BOOTLOADER_EN,    -- implement processor-internal bootloader?
     -- RISC-V CPU Extensions --
-    CPU_EXTENSION_RISCV_Zbb      => CPU_EXTENSION_RISCV_Zbb,      -- implement basic bit-manipulation sub-extension?
     CPU_EXTENSION_RISCV_Zfinx    => CPU_EXTENSION_RISCV_Zfinx,    -- implement 32-bit floating-point extension (using INT reg!)
     CPU_EXTENSION_RISCV_Zicsr    => CPU_EXTENSION_RISCV_Zicsr,    -- implement CSR system?
+    CPU_EXTENSION_RISCV_Zicntr   => CPU_EXTENSION_RISCV_Zicntr,   -- implement base counters?
+    CPU_EXTENSION_RISCV_Zihpm    => CPU_EXTENSION_RISCV_Zihpm,    -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei => CPU_EXTENSION_RISCV_Zifencei, -- implement instruction stream sync.?
     CPU_EXTENSION_RISCV_Zmmul    => CPU_EXTENSION_RISCV_Zmmul,    -- implement multiply-only M sub-extension?
     CPU_EXTENSION_RISCV_DEBUG    => ON_CHIP_DEBUGGER_EN,          -- implement CPU debug mode?
@@ -1377,8 +1406,6 @@ begin
     CPU_CNT_WIDTH                => CPU_CNT_WIDTH,        -- total width of CPU cycle and instret counters (0..64)
     -- Physical memory protection (PMP) --
     PMP_NUM_REGIONS              => PMP_NUM_REGIONS,      -- number of regions (0..64)
-    -- Hardware Performance Monitors (HPM) --
-    HPM_NUM_CNTS                 => HPM_NUM_CNTS,         -- number of implemented HPM counters (0..29)
     -- internal Instruction memory --
     MEM_INT_IMEM_EN              => MEM_INT_IMEM_EN,      -- implement processor-internal instruction memory
     MEM_INT_IMEM_SIZE            => MEM_INT_IMEM_SIZE,    -- size of processor-internal instruction memory in bytes
@@ -1408,7 +1435,8 @@ begin
     IO_CFS_EN                    => IO_CFS_EN,            -- implement custom functions subsystem (CFS)?
     IO_SLINK_EN                  => io_slink_en_c,        -- implement stream link interface?
     IO_NEOLED_EN                 => IO_NEOLED_EN,         -- implement NeoPixel-compatible smart LED interface (NEOLED)?
-    IO_XIRQ_NUM_CH               => XIRQ_NUM_CH           -- number of external interrupt (XIRQ) channels to implement
+    IO_XIRQ_NUM_CH               => XIRQ_NUM_CH,          -- number of external interrupt (XIRQ) channels to implement
+    IO_GPTMR_EN                  => IO_GPTMR_EN           -- implement general purpose timer (GPTMR)?
   )
   port map (
     -- host access --

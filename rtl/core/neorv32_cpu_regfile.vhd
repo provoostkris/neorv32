@@ -4,12 +4,12 @@
 -- # General purpose data register file. 32 entries (= 1024 bit) for normal mode (RV32I),          #
 -- # 16 entries (= 512 bit) for embedded mode (RV32E) when RISC-V "E" extension is enabled.        #
 -- #                                                                                               #
--- # Register zero (r0/x0) is a "normal" physical reg that has to be initialized to zero by the    #
--- # CPU control system. For normal operations register zero cannot be written.                    #
+-- # Register zero (r0/x0) is a "normal" physical register that has to be initialized to zero by   #
+-- # the early boot code. Register zero is always set to zero when written.                        #
 -- #                                                                                               #
 -- # The register file uses synchronous read accesses and a *single* (multiplexed) address port    #
--- # for writing and reading rs1 and a single read-only port for rs2. Therefore, the whole         #
--- # register file can be mapped to a single true dual-port block RAM.                             #
+-- # for writing and reading rd/rs1 and a single read-only port for rs2. Therefore, the whole      #
+-- # register file can be mapped to a single true-dual-port block RAM.                             #
 -- # ********************************************************************************************* #
 -- # BSD 3-Clause License                                                                          #
 -- #                                                                                               #
@@ -62,8 +62,7 @@ entity neorv32_cpu_regfile is
     alu_i  : in  std_ulogic_vector(data_width_c-1 downto 0); -- ALU result
     -- data output --
     rs1_o  : out std_ulogic_vector(data_width_c-1 downto 0); -- operand 1
-    rs2_o  : out std_ulogic_vector(data_width_c-1 downto 0); -- operand 2
-    cmp_o  : out std_ulogic_vector(1 downto 0) -- comparator status
+    rs2_o  : out std_ulogic_vector(data_width_c-1 downto 0)  -- operand 2
   );
 end neorv32_cpu_regfile;
 
@@ -80,10 +79,6 @@ architecture neorv32_cpu_regfile_rtl of neorv32_cpu_regfile is
   signal opa_addr     : std_ulogic_vector(4 downto 0); -- rs1/dst address
   signal opb_addr     : std_ulogic_vector(4 downto 0); -- rs2 address
   signal rs1, rs2     : std_ulogic_vector(data_width_c-1 downto 0); -- read data
-
-  -- comparator --
-  signal cmp_opx : std_ulogic_vector(data_width_c downto 0);
-  signal cmp_opy : std_ulogic_vector(data_width_c downto 0);
 
 begin
 
@@ -135,15 +130,6 @@ begin
   -- data output --
   rs1_o <= rs1;
   rs2_o <= rs2;
-
-
-  -- Comparator Unit (for conditional branches) ---------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  cmp_opx <= (rs1(rs1'left) and (not ctrl_i(ctrl_alu_unsigned_c))) & rs1;
-  cmp_opy <= (rs2(rs2'left) and (not ctrl_i(ctrl_alu_unsigned_c))) & rs2;
-
-  cmp_o(cmp_equal_c) <= '1' when (rs1 = rs2) else '0';
-  cmp_o(cmp_less_c)  <= '1' when (signed(cmp_opx) < signed(cmp_opy)) else '0';
 
 
 end neorv32_cpu_regfile_rtl;

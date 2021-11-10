@@ -5,34 +5,34 @@ image::riscv_logo.png[width=350,align=center]
 
 **Key Features**
 
-* 32-bit pipelined/multi-cycle in-order `rv32` RISC-V CPU
+* 32-bit multi-cycle in-order `rv32` RISC-V CPU
 * Optional RISC-V extensions:
 ** `A` - atomic memory access operations
+** `B` - bit-manipulation instructions
 ** `C` - 16-bit compressed instructions
 ** `I` - integer base ISA (always enabled)
 ** `E` - embedded CPU version (reduced register file size)
 ** `M` - integer multiplication and division hardware
 ** `U` - less-privileged _user_ mode
-** `Zbb` - basic bit-manipulation operations
 ** `Zfinx` - single-precision floating-point unit
 ** `Zicsr` - control and status register access (privileged architecture)
+** `Zicntr` - CPU base counters
+** `Zihpm` - hardware performance monitors
 ** `Zifencei` - instruction stream synchronization
 ** `Zmmul` - integer multiplication hardware
 ** `PMP` - physical memory protection
-** `HPM` - hardware performance monitors
-** `DB` - debug mode
-* Compatible to the RISC-V user specifications and a subset of the RISC-V privileged architecture specifications – passes the official RISC-V Architecture Tests (v2+)
+** `Debug` - debug mode
+* Compatible to the RISC-V user specifications and a subset of the RISC-V privileged architecture specifications - passes the official RISC-V Architecture Tests (v2+)
 * Official RISC-V open-source architecture ID
-* Standard RISC-V interrupts (_external_, _timer_, _software_) plus 16 _fast_ interrupts and 1 non-maskable interrupt
-* Supports most of the traps from the RISC-V specifications (including bus access exceptions) and traps on all unimplemented/illegal/malformed instructions
+* Standard RISC-V interrupts (_external_, _timer_, _software_) plus 16 _fast_ interrupts
+* Supports _all_ of the machine-level traps from the RISC-V specifications (including bus access exceptions and all unimplemented/illegal/malformed instructions)
+** This is a special aspect on _execution safety_ by <<_full_virtualization>>
 * Optional physical memory configuration (PMP), compatible to the RISC-V specifications
 * Optional hardware performance monitors (HPM) for application benchmarking
-* Separated interfaces for instruction fetch and data access (merged into single bus via a bus switch for
-the NEORV32 processor)
+* Separated interfaces for instruction fetch and data access (merged into a single processor bus))
 * little-endian byte order
 * Configurable hardware reset
-* No hardware support of unaligned data/instruction accesses – they will trigger an exception. If the C extension is enabled instructions
-can also be 16-bit aligned and a misaligned instruction address exception is not possible anymore
+* No hardware support of unaligned data/instruction accesses - they will trigger an exception.
 
 [NOTE]
 It is recommended to use the **NEORV32 Processor** as default top instance even if you only want to use the actual
@@ -54,30 +54,62 @@ specifications. The following figure shows the simplified architecture of the CP
 
 image::neorv32_cpu.png[align=center]
 
-The CPU uses a pipelined architecture with basically two main stages. The first stage (IF – instruction fetch)
-is responsible for fetching new instruction data from memory via the fetch engine. The instruction data is
-stored to a FIFO – the instruction prefetch buffer. The issue engine takes this data and assembles 32-bit
-instruction words for the next pipeline stage. Compressed instructions – if enabled – are also decompressed
-in this stage. The second stage (EX – execution) is responsible for actually executing the fetched instructions
-via the execute engine.
+The CPU implements a _multi-cycle_ architecture. Hence, each instruction is executed as a series of consecutive
+micro-operations. In order to increase performance, the CPU's **front-end** (instruction fetch) and **back-end**
+(instruction execution) are de-couples via a FIFO (the "instruction prefetch buffer"). Therefore, the
+front-end can already fetch new instructions while the back-end is still processing previously-fetched instructions.
 
-These two pipeline stages are based on a multi-cycle processing engine. So the processing of each stage for a
-certain operations can take several cycles. Since the IF and EX stages are decoupled via the instruction
-prefetch buffer, both stages can operate in parallel and with overlapping operations. Hence, the optimal CPI
-(cycles per instructions) is 2, but it can be significantly higher: For instance when executing loads/stores
-multi-cycle operations like divisions or when the instruction fetch engine has to reload the prefetch buffers
-due to a taken branch.
+The front-end is responsible for fetching 32-bit chunks of instruction words (one aligned 32-bit instruction,
+two 16-bit instructions or a mixture if 32-bit instructions are not aligned to 32-bit boundaries). The instruction
+data is stored to a FIFO queue - the instruction prefetch buffer.
+
+The back-end is responsible for the actual execution of the instruction. It includes an "issue engine",
+which takes data from the instruction prefetch buffer and assembles 32-bit instruction words (plain 32-bit
+instruction or decompressed 16-bit instructions) for execution.
+
+Front-end and back-end operate in parallel and with overlapping operations. Hence, the optimal CPI
+(cycles per instructions) is 2, but it can be significantly higher: for instance when executing loads/stores
+(accessing memory-mapped devices with high latency), executing multi-cycle ALU operations (like divisions) or
+when the CPU front-end has to reload the prefetch buffer due to a taken branch.
 
 Basically, the NEORV32 CPU is somewhere between a classical pipelined architecture, where each stage
 requires exactly one processing cycle (if not stalled) and a classical multi-cycle architecture, which executes
-every single instruction in a series of consecutive micro-operations. The combination of these two classical
-design paradigms allows an increased instruction execution in contrast to a pure multi-cycle approach (due to
-the pipelined approach) at a reduced hardware footprint (due to the multi-cycle approach).
+every single instruction (_including_ fetch) in a series of consecutive micro-operations. The combination of
+these two classical design paradigms allows an increased instruction execution in contrast to a pure multi-cycle
+approach (due to overlapping operation of fetch and execute) at a reduced hardware footprint (due to the
+multi-cycle concept).
 
-The CPU provides independent interfaces for instruction fetch and data access. These two bus interfaces are
-merged into a single processor-internal bus via a bus switch. Hence, memory locations including peripheral
-devices are mapped to a single 32-bit address space making the architecture a modified Von-Neumann
-Architecture.
+As a Von-Neumann machine, the CPU provides independent interfaces for instruction fetch and data access.
+These two bus interfaces are merged into a single processor-internal bus via a prioritizing bus switch (data accesses
+have higher priority). Hence, ALL memory locations including peripheral devices are mapped to a single unified 32-bit
+address space.
+
+
+// ####################################################################################################################
+:sectnums:
+=== Full Virtualization
+
+Just like the RISC-V ISA the NEORV32 aims to provide _maximum virtualization_ capabilities on CPU _and_ SoC level to
+allow a high standard of **execution safety**. The CPU supports **all** traps specified by the official RISC-V specifications.
+footnote:[If the `Zicsr` CPU extension is enabled (implementing the full set of the privileged architecture).]
+Thus, the CPU provides defined hardware fall-backs via traps for any expected and unexpected situation (e.g. executing an
+malformed instruction word or accessing a not-allocated memory address). For any kind of trap the core is always in a
+defined and fully synchronized state throughout the whole architecture (i.e. there are no out-of-order operations that
+might have to reverted). This allows predictable execution behavior at any time improving overall _execution safety_.
+
+**Execution Safety - NEORV32 Virtualization Features**
+
+* Due to the acknowledged memory accesses the CPU is _always_ sync with the memory system
+(i.e. there is no speculative execution / no out-of-order states).
+* The CPU supports _all_ RISC-V compatible bus exceptions including access exceptions, which are triggered if an
+accessed address does not respond or encounters an internal error during access.
+* Accessed memory addresses (plain memory, but also memory-mapped devices) need to respond within a fixed time
+window. Otherwise a bus access exception is raised.
+* The RISC-V specs. state that executing an malformed instruction results in unpredictable behavior. As an additional
+execution safety feature the NEORV32 CPU ensures that _all_ unimplemented/malformed/illegal instructions do raise an
+illegal instruction exceptions and do not commit any state-changing operation (like writing registers or triggering
+memory operations).
+* To be continued...
 
 
 // ####################################################################################################################
@@ -217,28 +249,38 @@ OK: 1/1 RISCV_TARGET=neorv32 RISCV_DEVICE=Zifencei XLEN=32
 :sectnums:
 ==== RISC-V Incompatibility Issues and Limitations
 
-This list shows the currently known issues regarding full RISC-V-compatibility. More specific information
+This list shows the currently identified issues regarding full RISC-V-compatibility. More specific information
 can be found in section <<_instruction_sets_and_extensions>>.
 
+.Hardwired R/W CSRs
 [IMPORTANT]
-The `misa` CSR is read-only. It shows the synthesized CPU extensions. Hence, all implemented
-CPU extensions are always active and cannot be enabled/disabled dynamically during runtime. Any
-write access to it (in machine mode) is ignored and will not cause any exception or side-effects.
+The `misa`, `mip` and `mtval` CSRs in the NEORV32 are _read-only_.
+Any write access to it (in machine mode) to them are ignored and will _not_ cause any exceptions or side-effects.
+Pending interrupt can only be cleared by acknowledging the interrupt-causing device. However, pending interrupts
+can still be ignored by clearing the according `mie` register bits.
 
-[IMPORTANT]
-The `mip` CSR is read-only. Pending IRQs can be cleared using the `mie` CSR.
-
-[IMPORTANT]
-The `mtval` CSR is read-only.
-
+.Physical memory protection
 [IMPORTANT]
 The physical memory protection (see section <<_machine_physical_memory_protection>>)
 only supports the modes _OFF_ and _NAPOT_ yet and a minimal granularity of 8 bytes per region.
 
+.Atomic memory operations
 [IMPORTANT]
-The `A` CPU extension (atomic memory access) only implements the `lr.w` and `sc.w` instructions yet.
-However, these instructions are sufficient to emulate all further AMO operations.
+The `A` CPU extension only implements the `lr.w` and `sc.w` instructions yet.
+However, these instructions are sufficient to emulate all further atomic memory operations.
 
+.Bit-manipulation operations
+[IMPORTANT]
+The NEORV32 `B` extension only implements the _basic bit-manipulation instructions_ (`Zbb`) subset
+and the _address generation instructions_ (`Zba`) subset yet.
+
+.Instruction Misalignment
+[NOTE]
+This is not a real RISC-V incompatibility, but something that might not be clear when studying the RISC-V privileged
+architecture specifications: for 32-bit only instructions (no `C` extension) the misaligned instruction exception
+is raised if bit 1 of the access address is set (i.e. not on 32-bit boundary). If the `C` extension is implemented
+there will be no misaligned instruction exceptions _at all_.
+In both cases bit 0 of the program counter and all related registers is hardwired to zero.
 
 <<<
 // ####################################################################################################################
@@ -284,15 +326,12 @@ direction seen from the CPU.
 | `d_bus_priv_o`   |     2 | out | current CPU privilege level
 4+^| **System Time (see <<_timeh>> CSR)**
 | `time_i`         |    64 | in  | system time input (from MTIME)
-4+^| **Non-Maskable Interrupt (<<_traps_exceptions_and_interrupts>>)**
-| `nm_irq_i`       |     1 | in  | non-maskable interrupt
 4+^| **Interrupts, RISC-V-compatible (<<_traps_exceptions_and_interrupts>>)**
 | `msw_irq_i`      |     1 | in  | RISC-V machine software interrupt
 | `mext_irq_i`     |     1 | in  | RISC-V machine external interrupt
 | `mtime_irq_i`    |     1 | in  | RISC-V machine timer interrupt
 4+^| **Fast Interrupts, NEORV32-specific (<<_traps_exceptions_and_interrupts>>)**
 | `firq_i`         |    16 | in  | fast interrupt request signals
-| `firq_ack_o`     |    16 | out | fast interrupt acknowledge signals
 4+^| **Enter Debug Mode Request (<<_on_chip_debugger_ocd>>)**
 | `db_halt_req_i`  |     1 | in  | request CPU to halt and enter debug mode
 |=======================
@@ -337,26 +376,27 @@ of the debugger memory. See section <<_on_chip_debugger_ocd>> for more informati
 :sectnums:
 === Instruction Sets and Extensions
 
-The NEORV32 is an RISC-V `rv32i` architecture that provides several optional RISC-V CPU and ISA
+The basic NEORV32 is a RISC-V `rv32i` architecture that provides several _optional_ RISC-V CPU and ISA
 (instruction set architecture) extensions. For more information regarding the RISC-V ISA extensions please
-see the The _RISC-V Instruction Set Manual – Volume I: Unprivileged ISA_ and _The RISC-V Instruction Set Manual
+see the the _RISC-V Instruction Set Manual - Volume I: Unprivileged ISA_ and _The RISC-V Instruction Set Manual
 Volume II: Privileged Architecture_, which are available in the projects `docs/references` folder.
 
 [TIP]
 The CPU can discover available ISA extensions via the <<_misa>> CSR and the
-_SYSINFO_CPU_ <<_system_configuration_information_memory_sysinfo, SYSINFO>> register
+`CPU` <<_system_configuration_information_memory_sysinfo, SYSINFO>> register
 or by executing an instruction and checking for an _illegal instruction exception_.
 
 [NOTE]
-Executing an instruction from an extension that is not implemented or not enabled (for example via the according
-top entity generic) will raise an _illegal instruction_ exception.
+Executing an instruction from an extension that is not supported yet or that is currently not enabled
+(via the according top entity generic) will raise an _illegal instruction_ exception.
 
 
 ==== **`A`** - Atomic Memory Access
 
-Atomic memory access instructions (for implementing semaphores and mutexes) are available when the
-`CPU_EXTENSION_RISCV_A` configuration generic is _true_. In this case the following additional instructions
-are available:
+Atomic memory access instructions allow more sophisticated memory operations like implementing semaphores and mutexes.
+The RICS-C specs. defines a specific _atomic_ extension that provides instructions for atomic memory accesses. The `A`
+ISA extension is enabled if the `CPU_EXTENSION_RISCV_A` configuration generic is _true_.
+In this case the following additional instructions are available:
 
 * `lr.w`: load-reservate
 * `sc.w`: store-conditional
@@ -364,45 +404,94 @@ are available:
 [NOTE]
 Even though only `lr.w` and `sc.w` instructions are implemented yet, all further atomic operations
 (load-modify-write instruction) can be emulated using these two instruction. Furthermore, the
-instruction’s ordering flags (`aq` and `lr`) are ignored by the CPU hardware. Using any other (not yet
-implemented) AMO (atomic memory operation) will trigger an illegal instruction exception.
+instruction's ordering flags (`aq` and `lr`) are ignored by the CPU hardware. Using any other (not yet
+implemented) AMO (atomic memory operation) will raise an illegal instruction exception.
+
+The *load-reservate* instruction behaves as a "normal" load-word instruction (`lw`) but will also set a CPU-internal
+_data memory access lock_. Executing a *store-conditional* behaves as "normal" store-word instruction (`sw`) that will
+only conduct an actual memory write operations if the lock is still intact. Additionally, the store-conditional instruction
+will also return the lock state (returns zero if the lock is still intact or non-zero if the lock has been broken).
+After the execution of the `sc` instruction, the lock is automatically removed.
+
+The lock is broken if at least one of the following conditions occur:
+. executing any data memory access instruction other than `lr.w`
+. raising _any_ t (for example an interrupt or a memory access exception)
 
 [NOTE]
 The atomic instructions have special requirements for memory system / bus interconnect. More
 information can be found in sections <<_bus_interface>> and <<_processor_external_memory_interface_wishbone_axi4_lite>>, respectively.
 
 
+==== **`B`** - Bit-Manipulation Operations
+
+The `B` ISA extension adds instructions for bit-manipulation operations. This extension is enabled if the
+`CPU_EXTENSION_RISCV_B` configuration generic is _true_.
+The official RISC-V specifications can be found here: https://github.com/riscv/riscv-bitmanip
+
+[IMPORTANT]
+The NEORV32 `B` extension only implements the _basic bit-manipulation instructions_ (`Zbb`) subset
+and the _address generation instructions_ (`Zba`) subset yet.
+
+The `Zbb` sub-extension adds the following instruction:
+
+* `andn`, `orn`, `xnor`
+* `clz`, `ctz`, `cpop`
+* `max`, `maxu`, `min`, `minu`
+* `sext.b`, `sext.h`, `zext.h`
+* `rol`, `ror`, `rori`
+* `orc.b`, `rev8`
+
+The `Zba` sub-extension adds the following instruction:
+
+* `sh1add`, `sh2add`, `sh3add`
+
+[TIP]
+By default, the bit-manipulation unit uses an _iterative_ approach to compute shift-related operations
+like `clz` and `rol`. To increase performance (at the cost of additional hardware resources) the 
+<<_fast_shift_en>> generic can be enabled to implement full-parallel logic (like barrel shifters) for all
+shift-related `B` instructions.
+
+[WARNING]
+The `B` extension is frozen but not officially ratified yet. There is no
+software support for this extension in the upstream GCC RISC-V port yet. However, an
+intrinsic library is provided to utilize the provided `B` extension features from C-language
+code (see `sw/example/bitmanip_test`).
+
+
 ==== **`C`** - Compressed Instructions
 
-Compressed 16-bit instructions are available when the `CPU_EXTENSION_RISCV_C` configuration generic is
-_true_. In this case the following instructions are available:
+The _compressed_ ISA extension provides 16-bit encodings of commonly used instructions to reduce code space size.
+The `C` extension is available when the `CPU_EXTENSION_RISCV_C` configuration generic is _true_.
+In this case the following instructions are available:
 
 * `c.addi4spn`, `c.lw`, `c.sw`, `c.nop`, `c.addi`, `c.jal`, `c.li`, `c.addi16sp`, `c.lui`, `c.srli`, `c.srai` `c.andi`, `c.sub`,
 `c.xor`, `c.or`, `c.and`, `c.j`, `c.beqz`, `c.bnez`, `c.slli`, `c.lwsp`, `c.jr`, `c.mv`, `c.ebreak`, `c.jalr`, `c.add`, `c.swsp`
 
 [NOTE]
-When the compressed instructions extension is enabled, branches to an _unaligned_ and _uncompressed_ address require
-an additional instruction fetch to load the required second half-word of that instruction. The performance can be increased
+When the compressed instructions extension is enabled, branches to an _unaligned_ and _uncompressed_ instruction require
+an additional instruction fetch to load the according second half-word of that instruction. The performance can be increased
 again by forcing a 32-bit alignment of branch target addresses. By default, this is enforced via the GCC `-falign-functions=4`,
 `-falign-labels=4`, `-falign-loops=4` and `-falign-jumps=4` compile flags (via the makefile).
 
 
 ==== **`E`** - Embedded CPU
 
-The embedded CPU extensions reduces the size of the general purpose register file from 32 entries to 16 entries to reduce hardware
-requirements. This extensions is enabled when the `CPU_EXTENSION_RISCV_E` configuration generic is _true_. Accesses to registers beyond
-`x15` will raise and _illegal instruction exception_.
+The embedded CPU extensions reduces the size of the general purpose register file from 32 entries to 16 entries to
+decrease physical hardware requirements (for example block RAM). This extensions is enabled when the `CPU_EXTENSION_RISCV_E`
+configuration generic is _true_. Accesses to registers beyond `x15` will raise and _illegal instruction exception_.
+This extension does not add any additional instructions or features.
 
 [IMPORTANT]
 Due to the reduced register file size an alternate toolchain ABI (**`ilp32e`**) is required.
 
 
 ==== **`I`** - Base Integer ISA
+
 The CPU always supports the complete `rv32i` base integer instruction set. This base set is always enabled
 regardless of the setting of the remaining exceptions. The base instruction set includes the following
 instructions:
 
-* immediates: `lui`, `auipc`
+* immediate: `lui`, `auipc`
 * jumps: `jal`, `jalr`
 * branches: `beq`, `bne`, `blt`, `bge`, `bltu`, `bgeu`
 * memory: `lb`, `lh`, `lw`, `lbu`, `lhu`, `sb`, `sh`, `sw`
@@ -423,7 +512,7 @@ executed. Any flags within the `fence` instruction word are ignore by the hardwa
 
 ==== **`M`** - Integer Multiplication and Division
 
-Hardware-accelerated integer multiplication and division instructions are available when the
+Hardware-accelerated integer multiplication and division operations are available when the
 `CPU_EXTENSION_RISCV_M` configuration generic is _true_. In this case the following instructions are
 available:
 
@@ -440,9 +529,9 @@ always require a fixed amount of cycles to complete - regardless of the input op
 ==== **`Zmmul`** - Integer Multiplication
 
 This is a _sub-extension_ of the `M` ISA extension. It implements the multiplication-only operations
-of the `M` extensions and is intended for small scale applications, that require hardware-based
+of the `M` extensions and is intended for size-constrained setups that require hardware-based
 integer multiplications but not hardware-based divisions, which will be computed entirely in software.
-This extension requires only ~50% of the hardware utilization of the `M` extension.
+This extension requires only ~50% of the hardware utilization of the "full" `M` extension.
 
 * multiplication: `mul`, `mulh`, `mulhsu`, `mulhu`
 
@@ -454,14 +543,16 @@ Note that `M` and `Zmmul` extensions _cannot_ be enabled at the same time.
 [TIP]
 If your RISC-V GCC toolchain does not (yet) support the `_Zmmul` ISA extensions, it can be "emulated"
 using a `rv32im` machine architecture and setting the `-mno-div` compiler flag
-(example `$ make MARCH=-march=rv32im USER_FLAGS+=-mno-div clean_all exe`).
+(example `$ make MARCH=rv32im USER_FLAGS+=-mno-div clean_all exe`).
 
 
 ==== **`U`** - Less-Privileged User Mode
 
-Adds the less-privileged _user mode_ if the `CPU_EXTENSION_RISCV_U` configuration generic is _true_. For
-instance, use-level code cannot access machine-mode CSRs. Furthermore, access to the address space (like
-peripheral/IO devices) can be limited via the physical memory protection (_PMP_) unit for code running in user mode.
+In addition to the basic (and highest-privileged) machine-mode, the _user-mode_ ISA extensions adds a second less-privileged
+operation mode. It is implemented if the `CPU_EXTENSION_RISCV_U` configuration generic is _true_.
+Code executed in user-mode cannot access machine-mode CSRs. Furthermore, user-mode access to the address space (like
+peripheral/IO devices) can be constrained via the physical memory protection (_PMP_).
+Any kind of privilege rights violation will raise an exception to allow full virtualization.
 
 
 ==== **`X`** - NEORV32-Specific (Custom) Extensions
@@ -470,27 +561,25 @@ The NEORV32-specific extensions are always enabled and are indicated by the set 
 
 The most important points of the NEORV32-specific extensions are:
 * The CPU provides 16 _fast interrupt_ interrupts (`FIRQ)`, which are controlled via custom bits in the `mie`
-and `mip` CSR. This extension is mapped to bits, that are available for custom use (according to the
+and `mip` CSR. This extension is mapped to _reserved_ CSR bits, that are available for custom use (according to the
 RISC-V specs). Also, custom trap codes for `mcause` are implemented.
-* The CPU provides a single _non-maskable_ interrupt (`NMI)` that also provides a custom trap code for `mcause`.
 * All undefined/unimplemented/malformed/illegal instructions do raise an illegal instruction exception (see <<_full_virtualization>>).
 
 
 ==== **`Zfinx`** Single-Precision Floating-Point Operations
 
-[WARNING]
-The NEORV32 `Zfinx` extension is specification-compliant and operational but still _experimental_.
+The `Zfinx` floating-point extension is an _alternative_ of the standard `F` floating-point ISA extension.
+The `Zfinx` extensions also uses the integer register file `x` to store and operate on floating-point data
+instead of a dedicated floating-point register file (hence, `F-in-x`). Thus, the `Zfinx` extension requires
+less hardware resources and features faster context changes. This also implies that there are NO dedicated `f`
+register file-related load/store or move instructions.
+The official RISC-V specifications can be found here: https://github.com/riscv/riscv-zfinx
 
-The `Zfinx` floating-point extension is an alternative of the `F` floating-point instruction that also uses the
-integer register file `x` to store and operate on floating-point data (hence, `F-in-x`). Since not dedicated floating-point `f`
-register file exists, the `Zfinx` extension requires less hardware resources and features faster context changes.
-This also implies that there are NO dedicated `f` register file related load/store or move instructions. The
-official RISC-V specifications can be found here: https://github.com/riscv/riscv-zfinx
-
+[TIP]
 The NEORV32 floating-point unit used by the `Zfinx` extension is compatible to the _IEEE-754_ specifications.
 
-The `Zfinx` extensions only supports single-precision (`.s` suffix) yet (so it is a direct alternative to the `F`
-extension). The `Zfinx` extension is implemented when the `CPU_EXTENSION_RISCV_Zfinx` configuration
+The `Zfinx` extensions only supports single-precision (`.s` instruction suffix), so it is a direct alternative
+to the `F` extension. The `Zfinx` extension is implemented when the `CPU_EXTENSION_RISCV_Zfinx` configuration
 generic is _true_. In this case the following instructions and CSRs are available:
 
 * conversion: `fcvt.s.w`, `fcvt.s.wu`, `fcvt.w.s`, `fcvt.wu.s`
@@ -506,8 +595,8 @@ Fused multiply-add instructions `f[n]m[add/sub].s` are not supported!
 Division `fdiv.s` and square root `fsqrt.s` instructions are not supported yet!
 
 [WARNING]
-Subnormal numbers (also "de-normalized" numbers) are not supported by the NEORV32 FPU.
-Subnormal numbers (exponent = 0) are _flushed to zero_ (setting them to +/- 0) before entering the
+Subnormal numbers ("de-normalized" numbers) are not supported by the NEORV32 FPU.
+Subnormal numbers (exponent = 0) are _flushed to zero_ setting them to +/- 0 before entering the
 FPU's processing core. If a computational instruction (like `fmul.s`) generates a subnormal result, the
 result is also flushed to zero during normalization.
 
@@ -518,59 +607,72 @@ intrinsic library is provided to utilize the provided `Zfinx` floating-point ext
 code (see `sw/example/floating_point_test`).
 
 
-==== **`Zbb`** Basic Bit-Manipulation Operations
-
-[WARNING]
-The NEORV32 `Zbb` extension is specification-compliant and operational but still _experimental_.
-
-The `Zbb` extension implements the _basic_ sub-set of the RISC-V bit-manipulation extensions `B`.
-The official RISC-V specifications can be found here: https://github.com/riscv/riscv-bitmanip
-
-The `Zbb` extension is implemented when the `CPU_EXTENSION_RISCV_Zbb` configuration
-generic is _true_. In this case the following instructions are available:
-
-* `andn`, `orn`, `xnor`
-* `clz`, `ctz`, `cpop`
-* `max`, `maxu`, `min`, `minu`
-* `sext.b`, `sext.h`, `zext.h`
-* `rol`, `ror`, `rori`
-* `orc.b`, `rev8`
-
-[TIP]
-By default, the bit-manipulation unit uses an _iterative_ approach to compute shift-related operations
-like `clz` and `rol`. To increase performance (at the cost of additional hardware resources) the 
-<<_fast_shift_en>> generic can be enabled to implement full-parallel logic (like barrel shifters) for all
-shift-related `Zbb` instructions.
-
-[IMPORTANT]
-The `Zbb` extension is frozen but not officially ratified yet. There is no
-software support for this extension in the upstream GCC RISC-V port yet. However, an
-intrinsic library is provided to utilize the provided `Zbb` extension from C-language
-code (see `sw/example/bitmanip_test`).
-
-
 ==== **`Zicsr`** Control and Status Register Access / Privileged Architecture
 
-The CSR access instructions as well as the exception and interrupt system (= the privileged architecture) is implemented when the
-`CPU_EXTENSION_RISCV_Zicsr` configuration generic is _true_. In this case the following instructions are
-available:
+The CSR access instructions as well as the exception and interrupt system (= the privileged architecture)
+is implemented when the `CPU_EXTENSION_RISCV_Zicsr` configuration generic is _true_.
+In this case the following instructions are available:
 
 * CSR access: `csrrw`, `csrrs`, `csrrc`, `csrrwi`, `csrrsi`, `csrrci`
 * environment: `mret`, `wfi`
 
 [WARNING]
-If the `Zicsr` extension is disabled the CPU does not provide any kind of interrupt or exception
-support at all. In order to provide the full spectrum of functions and to allow a secure executions
-environment, the `Zicsr` extension should always be enabled.
+If the `Zicsr` extension is disabled the CPU does not provide any _privileged architecture_ features at all!
+In order to provide the full set of functions and to allow a secure execution
+environment the `Zicsr` extension should always be enabled.
 
 [NOTE]
 The "wait for interrupt instruction" `wfi` works like a sleep command. When executed, the CPU is
 halted until a valid interrupt request occurs. To wake up again, the according interrupt source has to
 be enabled via the `mie` CSR and the global interrupt enable flag in `mstatus` has to be set.
 
+[NOTE]
+The `wfi` instruction may also be executed in user-mode without causing an exception as <<_mstatus>> bit
+`TW` (timeout wait) is hardwired to zero.
+
+
+
+
+==== **`Zicntr`** CPU Base Counters
+
+The `Zicntr` ISA extension adds the basic cycle `[m]cycle[h]`), instruction-retired (`[m]instret[h]`) and time (`time[h]`)
+counters. This extensions is stated is _mandatory_ by the RISC-V spec. However, size-constrained setups may remove support for
+these counters. Section <<_machine_counter_and_timer_csrs>> shows a list of all `Zicntr`-related CSRs.
+These are available if the `Zicntr` ISA extensions is enabled via the <<_cpu_extension_riscv_zicntr>> generic.
+
+[NOTE]
+Disabling the `Zicntr` extension does not remove the `time[h]`-driving MTIME unit.
+
+If `Zicntr` is disabled, all accesses to the according counter CSRs will raise an illegal instruction exception.
+
+
+
+==== **`Zihpm`** Hardware Performance Monitors
+
+In additions to the base cycle, instructions-retired and time counters the NEORV32 CPU provides
+up to 29 hardware performance monitors (HPM 3..31), which can be used to benchmark applications. Each HPM consists of an
+N-bit wide counter (split in a high-word 32-bit CSR and a low-word 32-bit CSR), where N is defined via the top's
+`HPM_CNT_WIDTH` generic (0..64-bit) and a corresponding event configuration CSR. The event configuration
+CSR defines the architectural events that lead to an increment of the associated HPM counter.
+
+The HPM counters are available if the `Zihpm` ISA extensions is enabled via the <<_cpu_extension_riscv_zihpm>> generic.
+
+Depending on the configuration the following additional CSR are available:
+
+* counters: `mhpmcounter*[h]` (3..31, depending on `HPM_NUM_CNTS`)
+* event configuration: `mhpmevent*` (3..31, depending on `HPM_NUM_CNTS`)
+
 [IMPORTANT]
-The `wfi` instruction will raise an illegal instruction exception when executed outside of machine-mode
-and <<_mstatus>> bit `TW` (timeout wait) is set.
+The HPM counter CSR can only be accessed in machine-mode. Hence, the according `mcounteren` CSR bits
+are always zero and read-only. Any access from less-privileged modes will raise an illegal instruction
+exception.
+
+[TIP]
+Auto-increment of the HPMs can be individually deactivated via the `mcountinhibit` CSR.
+
+[TIP]
+For a list of all HPM-related CSRs and all provided event configurations
+see section <<_hardware_performance_monitors_hpm>>.
 
 
 ==== **`Zifencei`** Instruction Stream Synchronization
@@ -580,31 +682,27 @@ generic is _true_. It allows manual synchronization of the instruction stream vi
 
 * `fence.i`
 
-[NOTE]
-The `fence.i` instruction resets the CPU's internal instruction fetch engine and flushes the prefetch buffer.
-This allows a clean re-fetch of modified data from memory. Also, the top's `i_bus_fencei_o` signal is set
-high for one cycle to inform the memory system. Any additional flags within the `fence.i` instruction word
-are ignore by the hardware.
-
-[NOTE]
-If the `Zifencei` extension is disabled (_CPU_EXTENSION_RISCV_Zifencei_ generic = false) executing
-a `fence.i` instruction will be executed as `nop` (and will **not trap**) and none of the functions
-described above will be executed.
+The `fence.i` instruction resets the CPU's front-end (instruction fetch) and flushes the prefetch buffer.
+This allows a clean re-fetch of modified instructions from memory. Also, the top's `i_bus_fencei_o` signal is set
+high for one cycle to inform the memory system (like the i-cache to perform a flush/reload.
+Any additional flags within the `fence.i` instruction word are ignore by the hardware.
 
 
 ==== **`PMP`** Physical Memory Protection
 
-The NEORV32 physical memory protection (PMP) is compatible to the PMP specified by the RISC-V specs.
-The CPU PMP only supports _NAPOT_ mode yet and a minimal region size (granularity) of 8 bytes. Larger minimal sizes can be configured
-via the top `PMP_MIN_GRANULARITY` generic to reduce hardware requirements. The physical memory protection system is implemented when the
-`PMP_NUM_REGIONS` configuration generic is >0. In this case the following additional CSRs are available:
+The NEORV32 physical memory protection (PMP) is compatible to the RISC-V PMP specifications. It can be used
+to constrain memory read/write/execute rights for each available privilege level.
+
+The NEORV32 PMP only supports _NAPOT_ mode yet and a minimal region size (granularity) of 8 bytes. Larger
+minimal sizes can be configured via the top `PMP_MIN_GRANULARITY` generic to reduce hardware requirements.
+The physical memory protection system is implemented when the `PMP_NUM_REGIONS` configuration generic is >0.
+In this case the following additional CSRs are available:
 
 * `pmpcfg*` (0..15, depending on configuration): PMP configuration registers
 * `pmpaddr*` (0..63, depending on configuration): PMP address registers
 
+[TIP]
 See section <<_machine_physical_memory_protection>> for more information regarding the PMP CSRs.
-
-**Configuration**
 
 The actual number of regions and the minimal region granularity are defined via the top entity
 `PMP_MIN_GRANULARITY` and `PMP_NUM_REGIONS` generics. `PMP_MIN_GRANULARITY` defines the minimal available
@@ -626,20 +724,20 @@ constant pmp_num_regions_critical_c : natural := 8;
 
 **Operation**
 
-Any memory access address (from the CPU's instruction fetch or data access interface) is tested if it is accessing any
-of the specified (configured via `pmpaddr*` and enabled via `pmpcfg*`) PMP regions. If an
-address accesses one of these regions, the configured access rights (attributes in `pmpcfg*`) are checked:
+Any CPU memory access address (from the instruction fetch or data access interface) is tested if it is accessing _any_
+of the specified  PMP regions(configured via `pmpaddr*` and enabled via `pmpcfg*`). If an
+address matches one of these regions, the configured access rights (attributes in `pmpcfg*`) are enforced:
 
 * a write access (store) will fail if no write attribute is set
 * a read access (load) will fail if no read attribute is set
 * an instruction fetch access will fail if no execute attribute is set
 
-If an access to a protected region does not have the according access rights (attributes) it will raise the according
-_instruction/load/store access fault exception_.
+If an access to a protected region does not have the according access rights it will raise the according
+instruction/load/store _access fault_ exception.
 
 By default, all PMP checks are enforced for user-level programs only. If you wish to enforce the physical
-memory protection also for machine-level programs you need to active the _locked bit_ in the according
-`pmpcfg*` configuration.
+memory protection also for machine-level programs you need to set the _locked bit_ in the according
+`pmpcfg*` configuration CSR.
 
 [IMPORTANT]
 After updating the address configuration registers `pmpaddr*` the system requires up to 33 cycles for
@@ -647,42 +745,8 @@ internal (iterative) computations before the configuration becomes valid.
 
 [NOTE]
 For more information regarding RISC-V physical memory protection see the official _The RISC-V
-Instruction Set Manual – Volume II: Privileged Architecture_ specifications.
+Instruction Set Manual - Volume II: Privileged Architecture_ specifications.
 
-
-==== **`HPM`** Hardware Performance Monitors
-
-In additions to the mandatory cycles (`[m]cycle[h]`) and instruction (`[m]instret[h]`) counters the NEORV32 CPU provides
-up to 29 hardware performance monitors (HPM 3..31), which can be used to benchmark applications. Each HPM consists of an
-N-bit wide counter (split in a high-word 32-bit CSR and a low-word 32-bit CSR), where N is defined via the top's
-`HPM_CNT_WIDTH` generic (0..64-bit), and a corresponding event configuration CSR. The event configuration
-CSR defines the architectural events that lead to an increment of the associated HPM counter.
-
-The cycle, time and instructions-retired counters (`[m]cycle[h]`, `time[h]`, `[m]instret[h]`) are
-mandatory performance monitors on every RISC-V platform and have fixed increment events. For example,
-the instructions-retired counter increments with each executed instructions. The actual hardware performance
-monitors are optional and can be configured to increment on arbitrary hardware events. The number of
-available HPM is configured via the top's `HPM_NUM_CNTS` generic at synthesis time. Assigning a zero will exclude
-all HPM logic from the design.
-
-Depending on the configuration, the following additional CSR are available:
-
-* counters: `mhpmcounter*[h]` (3..31, depending on configuration)
-* event configuration: `mhpmevent*` (3..31, depending on configuration)
-
-[IMPORTANT]
-The HPM counter CSR can only be accessed in machine-mode. Hence, the according `mcounteren` CSR bits
-are always zero and read-only.
-
-Auto-increment of the HPMs can be individually deactivated via the `mcountinhibit` CSR.
-
-If `HPM_NUM_CNTS` is lower than the maximum value (=29) the remaining HPM CSRs are not implemented and the
-according `mcountinhibit` CSR bits are hardwired to zero.
-However, accessing their associated CSRs will not raise an illegal instruction exception (if in machine mode).
-The according CSRs are read-only and will always return 0.
-
-[NOTE]
-For a list of all allocated HPM-related CSRs and all provided event configurations see section <<_hardware_performance_monitors_hpm>>.
 
 
 <<<
@@ -715,18 +779,12 @@ configurations are presented in <<_cpu_performance>>.
 | Memory access | `A`   | `lr.w` `sc.w`                             | 4 + ML
 | Multiplication | `M`  | `mul` `mulh` `mulhsu` `mulhu` | 2+31+3; FAST_MULfootnote:[DSP-based multiplication; enabled via `FAST_MUL_EN`.]: 5
 | Division       | `M`  | `div` `divu` `rem` `remu`     | 22+32+4
-| Bit-manipulation - arithmetic/logic | `B(Zbb)` | `sext.b` `sext.h` `min` `minu` `max` `maxu` `andn` `orn` `xnor` `zext`(pack) `rev8`(grevi) `orc.b`(gorci) | 3
-| Bit-manipulation - shifts | `B(Zbb)` | `clz` `ctz` | 3 + 0..32
-| Bit-manipulation - shifts | `B(Zbb)` | `cpop` | 3 + 32
-| Bit-manipulation - shifts | `B(Zbb)` | `rol` `ror` `rori` | 3 + SA
-| Bit-manipulation - single-bit | `B(Zbs)` | `sbset[i]` `sbclr[i]` `sbinv[i]` `sbext[i]` | 3
-| Bit-manipulation - shifted-add | `B(Zba)` | `sh1add` `sh2add` `sh3add` | 3
 | CSR access | `Zicsr` | `csrrw` `csrrs` `csrrc` `csrrwi` `csrrsi` `csrrci` | 4
 | System | `I/E`+`Zicsr` | `ecall` `ebreak` | 4
 | System | `I/E` | `fence` | 3
 | System | `C`+`Zicsr` | `c.break` | 4
 | System | `Zicsr` | `mret` `wfi` | 5
-| System | `Zifencei` | `fence.i` | 5
+| System | `Zifencei` | `fence.i` | 3 + ML
 | Floating-point - artihmetic | `Zfinx` | `fadd.s` | 110
 | Floating-point - artihmetic | `Zfinx` | `fsub.s` | 112
 | Floating-point - artihmetic | `Zfinx` | `fmul.s` | 22
@@ -734,46 +792,24 @@ configurations are presented in <<_cpu_performance>>.
 | Floating-point - misc | `Zfinx` | `fsgnj.s` `fsgnjn.s` `fsgnjx.s` `fclass.s` | 12
 | Floating-point - conversion | `Zfinx` | `fcvt.w.s` `fcvt.wu.s` | 47
 | Floating-point - conversion | `Zfinx` | `fcvt.s.w` `fcvt.s.wu` | 48
-| Basic bit-manip - logic | `Zbb` | `andn` `orn` `xnor` | 3
-| Basic bit-manip - shift | `Zbb` | `clz` `ctz` `cpop` `rol` `ror` `rori` | 4+SA, FAST_SHIFT: 4
-| Basic bit-manip - arith | `Zbb` | `max` `maxu` `min` `minu` | 3
-| Basic bit-manip - misc  | `Zbb` | `sext.b` `sext.h` `zext.h` `orc.b` `rev8` | 3
+| Bit-manipulation - arithmetic/logic | `B(Zbb)` | `sext.b` `sext.h` `min` `minu` `max` `maxu` `andn` `orn` `xnor` `zext`(pack) `rev8`(grevi) `orc.b`(gorci) | 3
+| Bit-manipulation - arithmetic/logic | `B(Zba)` | `sh1add` `sh2add` `sh3add` | 3
+| Bit-manipulation - shifts | `B(Zbb)` | `clz` `ctz` | 3 + 0..32
+| Bit-manipulation - shifts | `B(Zbb)` | `cpop` | 3 + 32
+| Bit-manipulation - shifts | `B(Zbb)` | `rol` `ror` `rori` | 3 + SA
+| Bit-manipulation - single-bit | `B(Zbs)` | `sbset[i]` `sbclr[i]` `sbinv[i]` `sbext[i]` | 3
+| Bit-manipulation - shifted-add | `B(Zba)` | `sh1add` `sh2add` `sh3add` | 3
 |=======================
 
 [NOTE]
-The presented values of the *floating-point execution cycles* are average values – obtained from
+The presented values of the *floating-point execution cycles* are average values - obtained from
 4096 instruction executions using pseudo-random input values. The execution time for emulating the
 instructions (using pure-software libraries) is ~17..140 times higher.
 
 
-
-// ####################################################################################################################
-include::cpu_csr.adoc[]
-
-
-
 <<<
 // ####################################################################################################################
-:sectnums:
-==== Full Virtualization
-
-Just like the RISC-V ISA the NEORV32 aims to support _ maximum virtualization_ capabilities
-on CPU _and_ SoC level. The CPU supports **all** traps specified by the official RISC-V specifications.footnote:[If the `Zicsr` CPU
-extension is enabled (implementing the full set of the privileged architecture).]
-Thus, the CPU provides defined hardware fall-backs for any expected and unexpected situation (e.g. executing an
-malformed instruction word or accessing a not-allocated address). For any kind of trap the core is always in a
-defined and fully synchronized state throughout the whole architecture (i.e. there are no out-of-order operations that
-have to be made undone). This allows predictable execution behavior - and thus, defined operations to resolve the cause
-of the trap - at any time improving overall _execution safety_.
-
-**NEORV32-Specific Virtualization Features**
-
-* Due to the acknowledged memory accesses the CPU is _always_ sync with the memory system
-(i.e. there is no speculative execution / no out-of-order states).
-* The CPU supports _all_ RISC-V bus exceptions including access exceptions that are triggered if an
-accessed address does not respond or encounters an internal error during access.
-* The CPU raises an illegal instruction trap for _all_ unimplemented/malformed/illegal instructions.
-* To be continued...
+include::cpu_csr.adoc[]
 
 
 <<<
@@ -783,7 +819,7 @@ accessed address does not respond or encounters an internal error during access.
 
 In this document the following nomenclature regarding traps is used:
 
-* _interrupt_ = asynchronous exceptions
+* _interrupts_ = asynchronous exceptions
 * _exceptions_ = synchronous exceptions
 * _traps_ = exceptions + interrupts (synchronous or asynchronous exceptions)
 
@@ -794,18 +830,19 @@ Additional information regarding the cause of the trap can be retrieved from `mt
 
 The traps are prioritized. If several _exceptions_ occur at once only the one with highest priority is triggered
 while all remaining exceptions are ignored. If several _interrupts_ trigger at once, the one with highest priority
-is serviced first while the remaining ones are queued. After completing the interrupt handler the interrupt with
+is serviced first while the remaining ones stay _pending_. After completing the interrupt handler the interrupt with
 the second highest priority will get serviced and so on until no further interrupt are pending.
 
-.Trigger Type
+.Interrupt Signal Requirements
 [IMPORTANT]
-All CPU interrupt request signals are high-level triggered. So an interrupt request will be generated if the
-according signal is _high_ for exactly one cycle (being high for several cycles might cause multiple
-triggering of the same interrupt).
+All interrupts request signals (including FIRQs) are **high-active**. A request has to stay at high-level (=asserted)
+until it is explicitly acknowledged by the CPU software (for example by writing to a specific memory-mapped register).
 
 .Instruction Atomicity
 [NOTE]
-All instructions execute as atomic operations – interrupts can only trigger between two instructions.
+All instructions execute as atomic operations - interrupts can only trigger between two instructions.
+So if there is a permanent interrupt request, exactly one instruction from the interrupt program will be executed before
+a new interrupt handler can start.
 
 
 :sectnums:
@@ -814,8 +851,7 @@ All instructions execute as atomic operations – interrupts can only trigger be
 If a load operation causes any exception, the instruction's destination register is
 _not written_ at all. Load exceptions caused by a misalignment or a physical memory protection fault do not
 trigger a bus read-operation at all. Exceptions caused by a store address misalignment or a store physical
-memory protection fault do not trigger
-a bus write-operation at all.
+memory protection fault do not trigger a bus write-operation at all.
 
 
 :sectnums:
@@ -823,17 +859,7 @@ a bus write-operation at all.
 
 As a custom extension, the NEORV32 CPU features 16 fast interrupt request (FIRQ) lines via the `firq_i` CPU top
 entity signals. These interrupts have custom configuration and status flags in the `mie` and `mip` CSRs and also
-provide custom trap codes in `mcause`. Thes FIRQs are reserved for processor-internal usage only.
-
-
-:sectnums:
-==== Non-Maskable Interrupt
-
-The NEORV32 CPU features a single non-maskable interrupt source via the `nm_irq_i` CPU (/Processor) top
-entity signal. This interrupt can be used to signal _critical_ system conditions that need immediate handling.
-The non-maskable interrupt _cannot_ be masked/disabled at all (even not in interrupt service routines).
-Hence, it does _not_ provide configuration/status flags in the `mie` and `mip` CSRs. The RISC-V-compatible
-`mcause` value `0x80000000` is used to indicate the non-maskable interrupt.
+provide custom trap codes in `mcause`. These FIRQs are reserved for NEORV32 processor-internal usage only.
 
 
 
@@ -846,37 +872,36 @@ Hence, it does _not_ provide configuration/status flags in the `mie` and `mip` C
 [cols="3,6,5,14,11,4,4"]
 [options="header",grid="rows"]
 |=======================
-| Prio. | `mcause`     | [RISC-V] | ID [C] | Cause | `mepc` | `mtval`
-| 1     | `0x80000000` | 1.0      | _TRAP_CODE_NMI_ | non-maskable interrupt | _I-PC_ | _0_
-| 2     | `0x8000000B` | 1.11     | _TRAP_CODE_MEI_ | machine external interrupt | _I-PC_ | _0_
-| 3     | `0x80000003` | 1.3      | _TRAP_CODE_MSI_ | machine software interrupt | _I-PC_ | _0_
-| 4     | `0x80000007` | 1.7      | _TRAP_CODE_MTI_ | machine timer interrupt | _I-PC_ | _0_
-| 5     | `0x80000010` | 1.16     | _TRAP_CODE_FIRQ_0_ | fast interrupt request channel 0 | _I-PC_ | _0_
-| 6     | `0x80000011` | 1.17     | _TRAP_CODE_FIRQ_1_ | fast interrupt request channel 1 | _I-PC_ | _0_
-| 7     | `0x80000012` | 1.18     | _TRAP_CODE_FIRQ_2_ | fast interrupt request channel 2 | _I-PC_ | _0_
-| 8     | `0x80000013` | 1.19     | _TRAP_CODE_FIRQ_3_ | fast interrupt request channel 3 | _I-PC_ | _0_
-| 9     | `0x80000014` | 1.20     | _TRAP_CODE_FIRQ_4_ | fast interrupt request channel 4 | _I-PC_ | _0_
-| 10    | `0x80000015` | 1.21     | _TRAP_CODE_FIRQ_5_ | fast interrupt request channel 5 | _I-PC_ | _0_
-| 11    | `0x80000016` | 1.22     | _TRAP_CODE_FIRQ_6_ | fast interrupt request channel 6 | _I-PC_ | _0_
-| 12    | `0x80000017` | 1.23     | _TRAP_CODE_FIRQ_7_ | fast interrupt request channel 7 | _I-PC_ | _0_
-| 13    | `0x80000018` | 1.24     | _TRAP_CODE_FIRQ_8_ | fast interrupt request channel 8 | _I-PC_ | _0_
-| 14    | `0x80000019` | 1.25     | _TRAP_CODE_FIRQ_9_ | fast interrupt request channel 9 | _I-PC_ | _0_
-| 15    | `0x8000001a` | 1.26     | _TRAP_CODE_FIRQ_10_ | fast interrupt request channel 10 | _I-PC_ | _0_
-| 16    | `0x8000001b` | 1.27     | _TRAP_CODE_FIRQ_11_ | fast interrupt request channel 11 | _I-PC_ | _0_
-| 17    | `0x8000001c` | 1.28     | _TRAP_CODE_FIRQ_12_ | fast interrupt request channel 12 | _I-PC_ | _0_
-| 18    | `0x8000001d` | 1.29     | _TRAP_CODE_FIRQ_13_ | fast interrupt request channel 13 | _I-PC_ | _0_
-| 19    | `0x8000001e` | 1.30     | _TRAP_CODE_FIRQ_14_ | fast interrupt request channel 14 | _I-PC_ | _0_
-| 20    | `0x8000001f` | 1.31     | _TRAP_CODE_FIRQ_15_ | fast interrupt request channel 15 | _I-PC_ | _0_
-| 21    | `0x00000001` | 0.1      | _TRAP_CODE_I_ACCESS_ | instruction access fault | _B-ADR_ | _PC_
-| 22    | `0x00000002` | 0.2      | _TRAP_CODE_I_ILLEGAL_ | illegal instruction | _PC_ | _Inst_
-| 23    | `0x00000000` | 0.0      | _TRAP_CODE_I_MISALIGNED_ | instruction address misaligned | _B-ADR_ | _PC_
-| 24    | `0x0000000B` | 0.11     | _TRAP_CODE_MENV_CALL_ | environment call from M-mode (ECALL in machine-mode) | _PC_ | _PC_
-| 25    | `0x00000008` | 0.8      | _TRAP_CODE_UENV_CALL_ | environment call from U-mode(ECALL in user-mode) | _PC_ | _PC_
-| 26    | `0x00000003` | 0.3      | _TRAP_CODE_BREAKPOINT_ | breakpoint (EBREAK) | _PC_ | _PC_
-| 27    | `0x00000006` | 0.6      | _TRAP_CODE_S_MISALIGNED_ | store address misaligned | _B-ADR_ | _B-ADR_
-| 28    | `0x00000004` | 0.4      | _TRAP_CODE_L_MISALIGNED_ | load address misaligned | _B-ADR_ | _B-ADR_
-| 29    | `0x00000007` | 0.7      | _TRAP_CODE_S_ACCESS_ | store access fault | _B-ADR_ | _B-ADR_
-| 30    | `0x00000005` | 0.5      | _TRAP_CODE_L_ACCESS_ | lad access fault | _B-ADR_ | _B-ADR_
+| Prio. | `mcause` | [RISC-V] | ID [C] | Cause | `mepc` | `mtval`
+| 1  | `0x00000000` | 0.0  | _TRAP_CODE_I_MISALIGNED_ | instruction address misaligned | _B-ADR_ | _PC_
+| 2  | `0x00000001` | 0.1  | _TRAP_CODE_I_ACCESS_     | instruction access fault | _B-ADR_ | _PC_
+| 3  | `0x00000002` | 0.2  | _TRAP_CODE_I_ILLEGAL_    | illegal instruction | _PC_ | _Inst_
+| 4  | `0x0000000B` | 0.11 | _TRAP_CODE_MENV_CALL_    | environment call from M-mode (`ecall` in machine-mode) | _PC_ | _PC_
+| 5  | `0x00000008` | 0.8  | _TRAP_CODE_UENV_CALL_    | environment call from U-mode (`ecall` in user-mode) | _PC_ | _PC_
+| 6  | `0x00000003` | 0.3  | _TRAP_CODE_BREAKPOINT_   | breakpoint (EBREAK) | _PC_ | _PC_
+| 7  | `0x00000006` | 0.6  | _TRAP_CODE_S_MISALIGNED_ | store address misaligned | _B-ADR_ | _B-ADR_
+| 8  | `0x00000004` | 0.4  | _TRAP_CODE_L_MISALIGNED_ | load address misaligned | _B-ADR_ | _B-ADR_
+| 9  | `0x00000007` | 0.7  | _TRAP_CODE_S_ACCESS_     | store access fault | _B-ADR_ | _B-ADR_
+| 10 | `0x00000005` | 0.5  | _TRAP_CODE_L_ACCESS_     | load access fault | _B-ADR_ | _B-ADR_
+| 11 | `0x80000010` | 1.16 | _TRAP_CODE_FIRQ_0_       | fast interrupt request channel 0 | _I-PC_ | _0_
+| 12 | `0x80000011` | 1.17 | _TRAP_CODE_FIRQ_1_       | fast interrupt request channel 1 | _I-PC_ | _0_
+| 13 | `0x80000012` | 1.18 | _TRAP_CODE_FIRQ_2_       | fast interrupt request channel 2 | _I-PC_ | _0_
+| 14 | `0x80000013` | 1.19 | _TRAP_CODE_FIRQ_3_       | fast interrupt request channel 3 | _I-PC_ | _0_
+| 15 | `0x80000014` | 1.20 | _TRAP_CODE_FIRQ_4_       | fast interrupt request channel 4 | _I-PC_ | _0_
+| 16 | `0x80000015` | 1.21 | _TRAP_CODE_FIRQ_5_       | fast interrupt request channel 5 | _I-PC_ | _0_
+| 17 | `0x80000016` | 1.22 | _TRAP_CODE_FIRQ_6_       | fast interrupt request channel 6 | _I-PC_ | _0_
+| 18 | `0x80000017` | 1.23 | _TRAP_CODE_FIRQ_7_       | fast interrupt request channel 7 | _I-PC_ | _0_
+| 19 | `0x80000018` | 1.24 | _TRAP_CODE_FIRQ_8_       | fast interrupt request channel 8 | _I-PC_ | _0_
+| 20 | `0x80000019` | 1.25 | _TRAP_CODE_FIRQ_9_       | fast interrupt request channel 9 | _I-PC_ | _0_
+| 21 | `0x8000001a` | 1.26 | _TRAP_CODE_FIRQ_10_      | fast interrupt request channel 10 | _I-PC_ | _0_
+| 22 | `0x8000001b` | 1.27 | _TRAP_CODE_FIRQ_11_      | fast interrupt request channel 11 | _I-PC_ | _0_
+| 23 | `0x8000001c` | 1.28 | _TRAP_CODE_FIRQ_12_      | fast interrupt request channel 12 | _I-PC_ | _0_
+| 24 | `0x8000001d` | 1.29 | _TRAP_CODE_FIRQ_13_      | fast interrupt request channel 13 | _I-PC_ | _0_
+| 25 | `0x8000001e` | 1.30 | _TRAP_CODE_FIRQ_14_      | fast interrupt request channel 14 | _I-PC_ | _0_
+| 26 | `0x8000001f` | 1.31 | _TRAP_CODE_FIRQ_15_      | fast interrupt request channel 15 | _I-PC_ | _0_
+| 27 | `0x8000000B` | 1.11 | _TRAP_CODE_MEI_          | machine external interrupt | _I-PC_ | _0_
+| 28 | `0x80000003` | 1.3  | _TRAP_CODE_MSI_          | machine software interrupt | _I-PC_ | _0_
+| 29 | `0x80000007` | 1.7  | _TRAP_CODE_MTI_          | machine timer interrupt | _I-PC_ | _0_
 |=======================
 
 **Notes**
@@ -909,7 +934,7 @@ accessing data (`d_bus_*`) via load and store operations. Both interfaces use th
 The CPU is a 32-bit architecture with separated instruction and data interfaces making it a Harvard
 Architecture. Each of this interfaces can access an address space of up to 2^32^ bytes (4GB). The memory
 system is based on 32-bit words with a minimal granularity of 1 byte. Please note, that the NEORV32 CPU
-does not support unaligned memory accesses _in hardware_ – however, a software-based handling can be
+does not support unaligned memory accesses _in hardware_ - however, a software-based handling can be
 implemented as any unaligned memory access will trigger an according exception.
 
 :sectnums:
@@ -961,7 +986,7 @@ Processor-internal peripherals or memories do not have to respond within one cyc
 However, the bus transaction has to be completed (= acknowledged) within a certain **response time window**. This time window is defined
 by the global `max_proc_int_response_time_c` constant (default = 15 cycles) from the processor's VHDL package file (`rtl/neorv32_package.vhd`).
 It defines the maximum number of cycles after which an _unacknowledged_ processor-internal bus transfer will timeout and raise a **bus fault exception**.
-The _BUSKEEPER_ hardware module (`rtl/core/neorv32_bus_keeper.vhd`) keeps track of all _internal_ bus transactions. If any bus operations times out
+The _BUSKEEPER_ hardware module (see section <<_internal_bus_monitor_buskeeper>>) keeps track of all _internal_ bus transactions. If any bus operations times out
 (for example when accessing "address space holes") this unit will issue a bus error to the CPU that will raise the according instruction fetch or data access bus exception.
 Note that **the bus keeper does not track external accesses via the external memory bus interface**. However, the external memory bus interface also provides
 an _optional_ bus timeout (see section <<_processor_external_memory_interface_wishbone_axi4_lite>>).
@@ -1046,7 +1071,7 @@ after power-up is not relevant for a defined CPU boot process.
 
 A good example to illustrate the concept of uncritical registers is a pipelined processing engine. Each stage
 of the engine features an N-bit _data register_ and a 1-bit _status register_. The status register is set when the
-data in the according data register is valid. At the end of the pipeline the status register might trigger a writeback
+data in the according data register is valid. At the end of the pipeline the status register might trigger a write-back
 of the processing result to some kind of memory. The initial status of the data registers after power-up is
 irrelevant as long as the status registers are all reset to a defined value that indicates there is no valid data in
 the pipeline’s data register. Therefore, the pipeline data register do no require a dedicated reset as they do not

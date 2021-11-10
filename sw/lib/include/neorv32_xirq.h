@@ -36,25 +36,11 @@
 /**********************************************************************//**
  * @file neorv32_xirq.h
  * @author Stephan Nolting
- * @brief SExternal Interrupt controller HW driver header file.
+ * @brief External Interrupt controller HW driver header file.
  **************************************************************************/
 
 #ifndef neorv32_xirq_h
 #define neorv32_xirq_h
-
-
-/**********************************************************************//**
- * @name XIRQ fast interrupt channel
- **************************************************************************/
- /**@{*/
-/** XIRQ MIE FIRQ bit */
-#define XIRQ_FIRQ_ENABLE  CSR_MIE_FIRQ8E  // MIE FIRQ bit
-/** XIRQ MIP FIRQ bit */
-#define XIRQ_FIRQ_PENDING CSR_MIP_FIRQ8P  // MIP FIRQ bit
-/** XIRQ RTE IRQ ID */
-#define XIRQ_RTE_ID       RTE_TRAP_FIRQ_8 // RTE IRQ ID
-/**@}*/
-
 
 // prototypes
 int neorv32_xirq_available(void);
@@ -62,6 +48,9 @@ int neorv32_xirq_setup(void);
 void neorv32_xirq_global_enable(void);
 void neorv32_xirq_global_disable(void);
 int neorv32_xirq_get_num(void);
+void neorv32_xirq_clear_pending(uint8_t ch);
+void neorv32_xirq_channel_enable(uint8_t ch);
+void neorv32_xirq_channel_disable(uint8_t ch);
 
 int neorv32_xirq_install(uint8_t ch, void (*handler)(void));
 int neorv32_xirq_uninstall(uint8_t ch);

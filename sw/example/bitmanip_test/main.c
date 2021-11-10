@@ -1,5 +1,5 @@
 // #################################################################################################
-// # << NEORV32 - RISC-V Bit-Manipulation 'Zbb' Extension Test Program >>                          #
+// # << NEORV32 - RISC-V Bit-Manipulation 'B' Extension Test Program >>                            #
 // # ********************************************************************************************* #
 // # BSD 3-Clause License                                                                          #
 // #                                                                                               #
@@ -36,7 +36,7 @@
 /**********************************************************************//**
  * @file bitmanip_test/main.c
  * @author Stephan Nolting
- * @brief Test program for the NEORV32 'Zbb' extension using pseudo-random
+ * @brief Test program for the NEORV32 'B` extension using pseudo-random
  * data as input; compares results from hardware against pure-sw reference functions.
  **************************************************************************/
 
@@ -64,7 +64,7 @@ void print_report(int num_err, int num_tests);
  * Main function; test all available operations of the NEORV32 'Zbb' extensions
  * using bit manipulation intrinsics and software-only reference functions (emulation).
  *
- * @note This program requires the Zbb CPU extension.
+ * @note This program requires the bit-manipulation CPU extension.
  *
  * @return Irrelevant.
  **************************************************************************/
@@ -78,34 +78,38 @@ int main() {
   neorv32_rte_setup();
 
   // init UART at default baud rate, no parity bits, ho hw flow control
-  neorv32_uart_setup(BAUD_RATE, PARITY_NONE, FLOW_CONTROL_NONE);
+  neorv32_uart0_setup(BAUD_RATE, PARITY_NONE, FLOW_CONTROL_NONE);
 
 // Disable compilation by default
 #ifndef RUN_CHECK
   #warning Program HAS NOT BEEN COMPILED! Use >>make USER_FLAGS+=-DRUN_CHECK clean_all exe<< to compile it.
 
   // inform the user if you are actually executing this
-  neorv32_uart_printf("ERROR! Program has not been compiled. Use >>make USER_FLAGS+=-DRUN_CHECK clean_all exe<< to compile it.\n");
+  neorv32_uart0_printf("ERROR! Program has not been compiled. Use >>make USER_FLAGS+=-DRUN_CHECK clean_all exe<< to compile it.\n");
 
   return 1;
 #endif
 
   // intro
-  neorv32_uart_printf("NEORV32 'Zbb' Bit-Manipulation Extension Test\n\n");
+  neorv32_uart0_printf("NEORV32 Bit-Manipulation Extension Test (Zba, Zbb)\n\n");
 
   // check available hardware extensions and compare with compiler flags
   neorv32_rte_check_isa(0); // silent = 0 -> show message if isa mismatch
 
   // check if Zbb extension is implemented at all
-  if ((SYSINFO_CPU & (1<<SYSINFO_CPU_ZBB)) == 0) {
-    neorv32_uart_print("Error! <Zbb> extension not synthesized!\n");
+  if ((neorv32_cpu_csr_read(CSR_MISA) & (1<<CSR_MISA_B)) == 0) {
+    neorv32_uart0_print("Error! <B> extension not synthesized!\n");
     return 1;
   }
 
-  neorv32_uart_printf("Starting Zbb bit-manipulation extension tests (%i test cases per instruction)...\n", num_tests);
+  neorv32_uart0_printf("Starting bit-manipulation extension tests (%i test cases per instruction)...\n\n", num_tests);
+
+  neorv32_uart0_printf("-----------------------------------------\n");
+  neorv32_uart0_printf("Zbb - Basic bit-manipulation instructions\n");
+  neorv32_uart0_printf("-----------------------------------------\n");
 
   // ANDN
-  neorv32_uart_printf("\nANDN:\n");
+  neorv32_uart0_printf("\nANDN:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -117,7 +121,7 @@ int main() {
   print_report(err_cnt, num_tests);
 
   // ORN
-  neorv32_uart_printf("\nORN:\n");
+  neorv32_uart0_printf("\nORN:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -129,7 +133,7 @@ int main() {
   print_report(err_cnt, num_tests);
 
   // XNOR
-  neorv32_uart_printf("\nXNOR:\n");
+  neorv32_uart0_printf("\nXNOR:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -143,7 +147,7 @@ int main() {
 
 
   // CLZ
-  neorv32_uart_printf("\nCLZ:\n");
+  neorv32_uart0_printf("\nCLZ:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -154,7 +158,7 @@ int main() {
   print_report(err_cnt, num_tests);
 
   // CTZ
-  neorv32_uart_printf("\nCTZ:\n");
+  neorv32_uart0_printf("\nCTZ:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -167,7 +171,7 @@ int main() {
 
 
   // CPOP
-  neorv32_uart_printf("\nCPOP:\n");
+  neorv32_uart0_printf("\nCPOP:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -180,7 +184,7 @@ int main() {
 
 
   // MAX
-  neorv32_uart_printf("\nMAX:\n");
+  neorv32_uart0_printf("\nMAX:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -192,7 +196,7 @@ int main() {
   print_report(err_cnt, num_tests);
 
   // MAXU
-  neorv32_uart_printf("\nMAXU:\n");
+  neorv32_uart0_printf("\nMAXU:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -204,7 +208,7 @@ int main() {
   print_report(err_cnt, num_tests);
 
   // MIN
-  neorv32_uart_printf("\nMIN:\n");
+  neorv32_uart0_printf("\nMIN:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -216,7 +220,7 @@ int main() {
   print_report(err_cnt, num_tests);
 
   // MINU
-  neorv32_uart_printf("\nMINU:\n");
+  neorv32_uart0_printf("\nMINU:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -230,7 +234,7 @@ int main() {
 
 
   // SEXT.B
-  neorv32_uart_printf("\nSEXT.B:\n");
+  neorv32_uart0_printf("\nSEXT.B:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -241,7 +245,7 @@ int main() {
   print_report(err_cnt, num_tests);
 
   // SEXT.H
-  neorv32_uart_printf("\nSEXT.H:\n");
+  neorv32_uart0_printf("\nSEXT.H:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -252,7 +256,7 @@ int main() {
   print_report(err_cnt, num_tests);
 
   // ZEXT.H
-  neorv32_uart_printf("\nZEXT.H:\n");
+  neorv32_uart0_printf("\nZEXT.H:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -265,7 +269,7 @@ int main() {
 
 
   // ROL
-  neorv32_uart_printf("\nROL:\n");
+  neorv32_uart0_printf("\nROL:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -277,7 +281,7 @@ int main() {
   print_report(err_cnt, num_tests);
 
   // ROR
-  neorv32_uart_printf("\nROR:\n");
+  neorv32_uart0_printf("\nROR:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -289,7 +293,7 @@ int main() {
   print_report(err_cnt, num_tests);
 
   // RORI
-  neorv32_uart_printf("\nRORI (imm=20):\n"); // FIXME: static immediate
+  neorv32_uart0_printf("\nRORI (imm=20):\n"); // FIXME: static immediate
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -302,7 +306,7 @@ int main() {
 
 
   // ORC.B
-  neorv32_uart_printf("\nORCB:\n");
+  neorv32_uart0_printf("\nORCB:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -315,7 +319,7 @@ int main() {
 
 
   // REV8
-  neorv32_uart_printf("\nREV8:\n");
+  neorv32_uart0_printf("\nREV8:\n");
   err_cnt = 0;
   for (i=0;i<num_tests; i++) {
     opa = xorshift32();
@@ -326,7 +330,49 @@ int main() {
   print_report(err_cnt, num_tests);
 
 
-  neorv32_uart_printf("\nBit manipulation extension tests done.\n");
+
+  neorv32_uart0_printf("\n\n");
+  neorv32_uart0_printf("-----------------------------------------\n");
+  neorv32_uart0_printf("Zba - Address generation instructions\n");
+  neorv32_uart0_printf("-----------------------------------------\n");
+
+  // SH1ADD
+  neorv32_uart0_printf("\nSH1ADD:\n");
+  err_cnt = 0;
+  for (i=0;i<num_tests; i++) {
+    opa = xorshift32();
+    opb = xorshift32();
+    res_sw = riscv_emulate_sh1add(opa, opb);
+    res_hw = riscv_intrinsic_sh1add(opa, opb);
+    err_cnt += check_result(i, opa, opb, res_sw, res_hw);
+  }
+  print_report(err_cnt, num_tests);
+
+  // SH2ADD
+  neorv32_uart0_printf("\nSH2ADD:\n");
+  err_cnt = 0;
+  for (i=0;i<num_tests; i++) {
+    opa = xorshift32();
+    opb = xorshift32();
+    res_sw = riscv_emulate_sh2add(opa, opb);
+    res_hw = riscv_intrinsic_sh2add(opa, opb);
+    err_cnt += check_result(i, opa, opb, res_sw, res_hw);
+  }
+  print_report(err_cnt, num_tests);
+
+  // SH2ADD
+  neorv32_uart0_printf("\nSH3ADD:\n");
+  err_cnt = 0;
+  for (i=0;i<num_tests; i++) {
+    opa = xorshift32();
+    res_sw = riscv_emulate_sh3add(opa, opb);
+    res_hw = riscv_intrinsic_sh3add(opa, opb);
+    err_cnt += check_result(i, opa, opb, res_sw, res_hw);
+  }
+  print_report(err_cnt, num_tests);
+
+
+  neorv32_uart0_printf("\nBit manipulation extension tests done.\n");
 
   return 0;
 }
@@ -362,8 +408,8 @@ uint32_t xorshift32(void) {
 uint32_t check_result(uint32_t num, uint32_t opa, uint32_t opb, uint32_t ref, uint32_t res) {
 
   if (ref != res) {
-    neorv32_uart_printf("%u: opa = 0x%x, opb = 0x%x : ref = 0x%x vs res = 0x%x ", num, opa, opb, ref, res);
-    neorv32_uart_printf("%c[1m[FAILED]%c[0m\n", 27, 27);
+    neorv32_uart0_printf("%u: opa = 0x%x, opb = 0x%x : ref = 0x%x vs res = 0x%x ", num, opa, opb, ref, res);
+    neorv32_uart0_printf("%c[1m[FAILED]%c[0m\n", 27, 27);
     return 1;
   }
   else {
@@ -380,12 +426,12 @@ uint32_t check_result(uint32_t num, uint32_t opa, uint32_t opb, uint32_t ref, ui
  **************************************************************************/
 void print_report(int num_err, int num_tests) {
 
-  neorv32_uart_printf("Errors: %i/%i ", num_err, num_tests);
+  neorv32_uart0_printf("Errors: %i/%i ", num_err, num_tests);
 
   if (num_err == 0) {
-    neorv32_uart_printf("%c[1m[ok]%c[0m\n", 27, 27);
+    neorv32_uart0_printf("%c[1m[ok]%c[0m\n", 27, 27);
   }
   else {
-    neorv32_uart_printf("%c[1m[FAILED]%c[0m\n", 27, 27);
+    neorv32_uart0_printf("%c[1m[FAILED]%c[0m\n", 27, 27);
   }
 }

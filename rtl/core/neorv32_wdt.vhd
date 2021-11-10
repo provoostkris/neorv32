@@ -112,6 +112,14 @@ architecture neorv32_wdt_rtl of neorv32_wdt is
   -- internal reset (sync, low-active) --
   signal rstn_sync : std_ulogic;
 
+  -- cpu interrupt --
+  type cpu_irq_t is record
+    pending : std_ulogic;
+    set     : std_ulogic;
+    clr     : std_ulogic;
+  end record;
+  signal cpu_irq : cpu_irq_t;
+
 begin
 
   -- Access Control -------------------------------------------------------------------------
@@ -133,6 +141,7 @@ begin
       ctrl_reg.clk_sel <= (others => '1'); -- slowest clock source
       ctrl_reg.lock    <= '0';
     elsif rising_edge(clk_i) then
+      -- acknowledge interrupt when resetting WDT --
       if (rstn_sync = '0') then -- internal reset
         ctrl_reg.reset   <= '0';
         ctrl_reg.enforce <= '0';
@@ -178,8 +187,32 @@ begin
   end process wdt_counter;
 
   -- action trigger --
-  irq_o  <= ctrl_reg.enable and (wdt_cnt(wdt_cnt'left) or ctrl_reg.enforce) and (not ctrl_reg.mode); -- mode 0: IRQ
-  hw_rst <= ctrl_reg.enable and (wdt_cnt(wdt_cnt'left) or ctrl_reg.enforce) and (    ctrl_reg.mode); -- mode 1: RESET
+  cpu_irq.set <= ctrl_reg.enable and (wdt_cnt(wdt_cnt'left) or ctrl_reg.enforce) and (not ctrl_reg.mode); -- mode 0: IRQ
+  cpu_irq.clr <= ctrl_reg.reset; -- ack IRQ on WDT reset
+  hw_rst      <= ctrl_reg.enable and (wdt_cnt(wdt_cnt'left) or ctrl_reg.enforce) and (    ctrl_reg.mode); -- mode 1: RESET
+
+
+  -- Interrupt ------------------------------------------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  irq_gen: process(clk_i)
+  begin
+    if rising_edge(clk_i) then
+      if (ctrl_reg.enable = '0') then
+        cpu_irq.pending <= '0';
+      else
+        if (cpu_irq.set = '1') then
+          cpu_irq.pending <= '1';
+        elsif(cpu_irq.clr = '1') then
+          cpu_irq.pending <= '0';
+        else
+          cpu_irq.pending <= cpu_irq.pending;
+        end if;
+      end if;
+    end if;
+  end process irq_gen;
+
+  -- CPU IRQ --
+  irq_o <= cpu_irq.pending;
 
 
   -- Reset Generator & Action Cause Indicator -----------------------------------------------

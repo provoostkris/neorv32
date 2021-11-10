@@ -28,7 +28,9 @@ set_property target_language VHDL [current_project]
 # Define filesets
 
 ## Core: NEORV32
-set fileset_neorv32 [glob ./../../../rtl/core/*.vhd]
+add_files [glob ./../../../rtl/core/*.vhd] ./../../../rtl/core/mem/neorv32_dmem.default.vhd ./../../../rtl/core/mem/neorv32_imem.default.vhd
+set_property library neorv32 [get_files [glob ./../../../rtl/core/*.vhd]]
+set_property library neorv32 [get_files [glob ./../../../rtl/core/mem/neorv32_*mem.default.vhd]]
 
 ## Design: processor subsystem template, and (optionally) BoardTop and/or other additional sources
 set fileset_design ./../../../rtl/test_setups/neorv32_test_setup_bootloader.vhd
@@ -37,13 +39,9 @@ set fileset_design ./../../../rtl/test_setups/neorv32_test_setup_bootloader.vhd
 set fileset_constraints [glob ./*.xdc]
 
 ## Simulation-only sources
-set fileset_sim [list ./../../../sim/neorv32_tb.simple.vhd ./../../../sim/uart_rx.simple.vhd]
+set fileset_sim [list ./../../../sim/simple/neorv32_tb.simple.vhd ./../../../sim/simple/uart_rx.simple.vhd]
 
 # Add source files
-
-## Core
-add_files $fileset_neorv32
-set_property library neorv32 [get_files $fileset_neorv32]
 
 ## Design
 add_files $fileset_design

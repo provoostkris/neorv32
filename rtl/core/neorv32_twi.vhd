@@ -2,8 +2,8 @@
 -- # << NEORV32 - Two-Wire Interface Controller (TWI) >>                                           #
 -- # ********************************************************************************************* #
 -- # Supports START and STOP conditions, 8 bit data + ACK/NACK transfers and clock stretching.     #
--- # Supports ACKs by the constroller. No multi-controller support and no peripheral mode support  #
--- # yet. Interrupt: TWI_transfer_done                                                             #
+-- # Supports ACKs by the controller. No multi-controller support and no peripheral mode support   #
+-- # yet. Interrupt: "operation done"                                                              #
 -- # ********************************************************************************************* #
 -- # BSD 3-Clause License                                                                          #
 -- #                                                                                               #
@@ -71,23 +71,23 @@ architecture neorv32_twi_rtl of neorv32_twi is
   constant lo_abb_c : natural := index_size_f(twi_size_c); -- low address boundary bit
 
   -- control reg bits --
-  constant ctrl_twi_en_c     : natural := 0; -- r/w: TWI enable
-  constant ctrl_twi_start_c  : natural := 1; -- -/w: Generate START condition
-  constant ctrl_twi_stop_c   : natural := 2; -- -/w: Generate STOP condition
-  constant ctrl_twi_prsc0_c  : natural := 3; -- r/w: CLK prsc bit 0
-  constant ctrl_twi_prsc1_c  : natural := 4; -- r/w: CLK prsc bit 1
-  constant ctrl_twi_prsc2_c  : natural := 5; -- r/w: CLK prsc bit 2
-  constant ctrl_twi_mack_c   : natural := 6; -- r/w: generate ACK by controller for transmission
-  constant ctrl_twi_cksten_c : natural := 7; -- r/w: enable clock stretching by peripheral
+  constant ctrl_en_c     : natural := 0; -- r/w: TWI enable
+  constant ctrl_start_c  : natural := 1; -- -/w: Generate START condition
+  constant ctrl_stop_c   : natural := 2; -- -/w: Generate STOP condition
+  constant ctrl_prsc0_c  : natural := 3; -- r/w: CLK prsc bit 0
+  constant ctrl_prsc1_c  : natural := 4; -- r/w: CLK prsc bit 1
+  constant ctrl_prsc2_c  : natural := 5; -- r/w: CLK prsc bit 2
+  constant ctrl_mack_c   : natural := 6; -- r/w: generate ACK by controller for transmission
+  constant ctrl_cksten_c : natural := 7; -- r/w: enable clock stretching by peripheral
   --
-  constant ctrl_twi_ack_c    : natural := 30; -- r/-: Set if ACK received
-  constant ctrl_twi_busy_c   : natural := 31; -- r/-: Set if TWI unit is busy
+  constant ctrl_ack_c    : natural := 30; -- r/-: Set if ACK received
+  constant ctrl_busy_c   : natural := 31; -- r/-: Set if TWI unit is busy
 
   -- access control --
   signal acc_en : std_ulogic; -- module access enable
   signal addr   : std_ulogic_vector(31 downto 0); -- access address
-  signal wr_en  : std_ulogic; -- word write enable
-  signal rd_en  : std_ulogic; -- read enable
+  signal wren   : std_ulogic; -- word write enable
+  signal rden   : std_ulogic; -- read enable
 
   -- twi clocking --
   signal twi_clk        : std_ulogic;
@@ -98,10 +98,10 @@ architecture neorv32_twi_rtl of neorv32_twi is
   signal twi_clk_halt : std_ulogic;
 
   -- twi transceiver core --
-  signal ctrl         : std_ulogic_vector(7 downto 0); -- unit's control register
-  signal arbiter      : std_ulogic_vector(2 downto 0);
-  signal twi_bitcnt   : std_ulogic_vector(3 downto 0);
-  signal twi_rtx_sreg : std_ulogic_vector(8 downto 0); -- main rx/tx shift reg
+  signal ctrl     : std_ulogic_vector(7 downto 0); -- unit's control register
+  signal arbiter  : std_ulogic_vector(2 downto 0);
+  signal bitcnt   : std_ulogic_vector(3 downto 0);
+  signal rtx_sreg : std_ulogic_vector(8 downto 0); -- main rx/tx shift reg
 
   -- tri-state I/O --
   signal twi_sda_i_ff0, twi_sda_i_ff1 : std_ulogic; -- sda input sync
@@ -109,14 +109,22 @@ architecture neorv32_twi_rtl of neorv32_twi is
   signal twi_sda_i,     twi_sda_o     : std_ulogic;
   signal twi_scl_i,     twi_scl_o     : std_ulogic;
 
+  -- interrupt generator --
+  type irq_t is record
+    pending : std_ulogic; -- pending interrupt request
+    set     : std_ulogic;
+    clr     : std_ulogic;
+  end record;
+  signal irq : irq_t;
+
 begin
 
   -- Access Control -------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   acc_en <= '1' when (addr_i(hi_abb_c downto lo_abb_c) = twi_base_c(hi_abb_c downto lo_abb_c)) else '0';
   addr   <= twi_base_c(31 downto lo_abb_c) & addr_i(lo_abb_c-1 downto 2) & "00"; -- word aligned
-  wr_en  <= acc_en and wren_i;
-  rd_en  <= acc_en and rden_i;
+  wren   <= acc_en and wren_i;
+  rden   <= acc_en and rden_i;
 
 
   -- Read/Write Access ----------------------------------------------------------------------
@@ -124,29 +132,28 @@ begin
   rw_access: process(clk_i)
   begin
     if rising_edge(clk_i) then
-      ack_o <= acc_en and (rden_i or wren_i);
+      ack_o <= rden or wren;
       -- write access --
-      if (wr_en = '1') then
+      if (wren = '1') then
         if (addr = twi_ctrl_addr_c) then
           ctrl <= data_i(ctrl'left downto 0);
         end if;
       end if;
       -- read access --
       data_o <= (others => '0');
-      if (rd_en = '1') then
+      if (rden = '1') then
         if (addr = twi_ctrl_addr_c) then
-          data_o(ctrl_twi_en_c)     <= ctrl(ctrl_twi_en_c);
-          data_o(ctrl_twi_prsc0_c)  <= ctrl(ctrl_twi_prsc0_c);
-          data_o(ctrl_twi_prsc1_c)  <= ctrl(ctrl_twi_prsc1_c);
-          data_o(ctrl_twi_prsc2_c)  <= ctrl(ctrl_twi_prsc2_c);
-          data_o(ctrl_twi_mack_c)   <= ctrl(ctrl_twi_mack_c);
-          data_o(ctrl_twi_cksten_c) <= ctrl(ctrl_twi_cksten_c);
+          data_o(ctrl_en_c)     <= ctrl(ctrl_en_c);
+          data_o(ctrl_prsc0_c)  <= ctrl(ctrl_prsc0_c);
+          data_o(ctrl_prsc1_c)  <= ctrl(ctrl_prsc1_c);
+          data_o(ctrl_prsc2_c)  <= ctrl(ctrl_prsc2_c);
+          data_o(ctrl_mack_c)   <= ctrl(ctrl_mack_c);
+          data_o(ctrl_cksten_c) <= ctrl(ctrl_cksten_c);
           --
-          data_o(ctrl_twi_ack_c)    <= not twi_rtx_sreg(0);
-          data_o(ctrl_twi_busy_c)   <= arbiter(1) or arbiter(0);
+          data_o(ctrl_ack_c)    <= not rtx_sreg(0);
+          data_o(ctrl_busy_c)   <= arbiter(1) or arbiter(0);
         else -- twi_rtx_addr_c =>
-          data_o(7 downto 0)        <= twi_rtx_sreg(8 downto 1);
-          
+          data_o(7 downto 0)    <= rtx_sreg(8 downto 1);
         end if;
       end if;
     end if;
@@ -156,23 +163,24 @@ begin
   -- Clock Generation -----------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   -- clock generator enable --
-  clkgen_en_o <= ctrl(ctrl_twi_en_c);
+  clkgen_en_o <= ctrl(ctrl_en_c);
 
-  -- main twi clock select --
-  twi_clk <= clkgen_i(to_integer(unsigned(ctrl(ctrl_twi_prsc2_c downto ctrl_twi_prsc0_c))));
+  -- twi clock select --
+  twi_clk <= clkgen_i(to_integer(unsigned(ctrl(ctrl_prsc2_c downto ctrl_prsc0_c))));
 
   -- generate four non-overlapping clock ticks at twi_clk/4 --
   clock_phase_gen: process(clk_i)
   begin
     if rising_edge(clk_i) then
       if (arbiter(2) = '0') or (arbiter = "100") then -- offline or idle
-        twi_phase_gen <= "0001"; -- make sure to start with a new phase, 0,1,2,3 stepping
+        twi_phase_gen <= "0001"; -- make sure to start with a new phase, bit 0,1,2,3 stepping
       elsif (twi_clk = '1') and (twi_clk_halt = '0') then -- enabled and no clock stretching detected
-        twi_phase_gen <= twi_phase_gen(2 downto 0) & twi_phase_gen(3); -- shift left
+        twi_phase_gen <= twi_phase_gen(2 downto 0) & twi_phase_gen(3); -- rotate left
       end if;
     end if;
   end process clock_phase_gen;
 
+  -- TWI bus signals are set/sampled using 4 clock phases --
   twi_clk_phase(0) <= twi_phase_gen(0) and twi_clk; -- first step
   twi_clk_phase(1) <= twi_phase_gen(1) and twi_clk;
   twi_clk_phase(2) <= twi_phase_gen(2) and twi_clk;
@@ -191,26 +199,25 @@ begin
       twi_scl_i_ff1 <= twi_scl_i_ff0;
 
       -- defaults --
-      irq_o      <= '0';
-      arbiter(2) <= ctrl(ctrl_twi_en_c); -- still activated?
+      irq.set <= '0';
 
       -- serial engine --
-      -- TWI bus signals are set/sampled using 4 clock phases
+      arbiter(2) <= ctrl(ctrl_en_c); -- still activated?
       case arbiter is
 
         when "100" => -- IDLE: waiting for requests, bus might be still claimed by this controller if no STOP condition was generated
-          twi_bitcnt <= (others => '0');
-          if (wr_en = '1') then
+          bitcnt <= (others => '0');
+          if (wren = '1') then
             if (addr = twi_ctrl_addr_c) then
-              if (data_i(ctrl_twi_start_c) = '1') then -- issue START condition
+              if (data_i(ctrl_start_c) = '1') then -- issue START condition
                 arbiter(1 downto 0) <= "01";
-              elsif (data_i(ctrl_twi_stop_c) = '1') then  -- issue STOP condition
+              elsif (data_i(ctrl_stop_c) = '1') then  -- issue STOP condition
                 arbiter(1 downto 0) <= "10";
               end if;
             elsif (addr = twi_rtx_addr_c) then -- start a data transmission
-              -- one bit extra for ack, issued by controller if ctrl_twi_mack_c is set,
-              -- sampled from peripheral if ctrl_twi_mack_c is cleared
-              twi_rtx_sreg <= data_i(7 downto 0) & (not ctrl(ctrl_twi_mack_c));
+              -- one bit extra for ack, issued by controller if ctrl_mack_c is set,
+              -- sampled from peripheral if ctrl_mack_c is cleared
+              rtx_sreg <= data_i(7 downto 0) & (not ctrl(ctrl_mack_c));
               arbiter(1 downto 0) <= "11";
             end if;
           end if;
@@ -221,11 +228,12 @@ begin
           elsif (twi_clk_phase(1) = '1') then
             twi_sda_o <= '0';
           end if;
-
+          --
           if (twi_clk_phase(0) = '1') then
             twi_scl_o <= '1';
           elsif (twi_clk_phase(3) = '1') then
             twi_scl_o <= '0';
+            irq.set   <= '1'; -- Interrupt!
             arbiter(1 downto 0) <= "00"; -- go back to IDLE
           end if;
 
@@ -234,9 +242,10 @@ begin
             twi_sda_o <= '0';
           elsif (twi_clk_phase(3) = '1') then
             twi_sda_o <= '1';
+            irq.set   <= '1'; -- Interrupt!
             arbiter(1 downto 0) <= "00"; -- go back to IDLE
           end if;
-          
+          --
           if (twi_clk_phase(0) = '1') then
             twi_scl_o <= '0';
           elsif (twi_clk_phase(1) = '1') then
@@ -245,25 +254,25 @@ begin
 
         when "111" => -- TRANSMISSION: transmission in progress
           if (twi_clk_phase(0) = '1') then
-            twi_bitcnt   <= std_ulogic_vector(unsigned(twi_bitcnt) + 1);
-            twi_scl_o    <= '0';
-            twi_sda_o    <= twi_rtx_sreg(8); -- MSB first
+            bitcnt    <= std_ulogic_vector(unsigned(bitcnt) + 1);
+            twi_scl_o <= '0';
+            twi_sda_o <= rtx_sreg(8); -- MSB first
           elsif (twi_clk_phase(1) = '1') then -- first half + second half of valid data strobe
-            twi_scl_o    <= '1';
+            twi_scl_o <= '1';
           elsif (twi_clk_phase(3) = '1') then
-            twi_rtx_sreg <= twi_rtx_sreg(7 downto 0) & twi_sda_i_ff1; -- sample and shift left
-            twi_scl_o    <= '0';
+            rtx_sreg  <= rtx_sreg(7 downto 0) & twi_sda_i_ff1; -- sample and shift left
+            twi_scl_o <= '0';
           end if;
-
-          if (twi_bitcnt = "1010") then -- 8 data bits + 1 bit for ACK + 1 tick delay
+          --
+          if (bitcnt = "1010") then -- 8 data bits + 1 bit for ACK + 1 tick delay
+            irq.set <= '1'; -- Interrupt!
             arbiter(1 downto 0) <= "00"; -- go back to IDLE
-            irq_o <= '1'; -- fire IRQ
           end if;
 
         when others => -- "0--" OFFLINE: TWI deactivated
           twi_sda_o <= '1';
           twi_scl_o <= '1';
-          arbiter   <= ctrl(ctrl_twi_en_c) & "00"; -- stay here, go to idle when activated
+          arbiter(1 downto 0) <= "00"; -- stay here, go to idle when activated
 
       end case;
     end if;
@@ -276,7 +285,7 @@ begin
   begin
     -- clock stretching by the peripheral can happen at "any time"
     if (arbiter(2) = '1') and              -- module enabled
-       (ctrl(ctrl_twi_cksten_c) = '1') and -- clock stretching enabled
+       (ctrl(ctrl_cksten_c) = '1') and -- clock stretching enabled
        (twi_scl_o = '1') and               -- controller wants to pull scl high
        (twi_scl_i_ff1 = '0') then          -- but scl is pulled low by peripheral
       twi_clk_halt <= '1';
@@ -295,6 +304,30 @@ begin
   -- read-back --
   twi_sda_i <= std_ulogic(twi_sda_io);
   twi_scl_i <= std_ulogic(twi_scl_io);
+
+
+  -- Interrupt Generator --------------------------------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  irq_generator: process(clk_i)
+  begin
+    if rising_edge(clk_i) then
+      if (ctrl(ctrl_en_c) = '0') then
+        irq.pending <= '0';
+      else
+        if (irq.set = '1') then
+          irq.pending <= '1';
+        elsif (irq.clr = '1') then
+          irq.pending <= '0';
+        end if;
+      end if;
+    end if;
+  end process irq_generator;
+
+  -- IRQ request to CPU --
+  irq_o <= irq.pending;
+
+  -- IRQ acknowledge --
+  irq.clr <= '1' when ((rden = '1') and (addr = twi_rtx_addr_c)) or (wren = '1') else '0'; -- read data register OR write data/control register
 
 
 end neorv32_twi_rtl;

@@ -115,7 +115,7 @@ architecture neorv32_tb_rtl of neorv32_tb is
   signal spi_data : std_ulogic;
 
   -- irq --
-  signal msi_ring, mei_ring, nmi_ring : std_ulogic;
+  signal msi_ring, mei_ring : std_ulogic;
 
   -- Wishbone bus --
   type wishbone_t is record
@@ -284,20 +284,22 @@ begin
     ON_CHIP_DEBUGGER_EN          => true,          -- implement on-chip debugger
     -- RISC-V CPU Extensions --
     CPU_EXTENSION_RISCV_A        => true,          -- implement atomic extension?
+    CPU_EXTENSION_RISCV_B        => true,          -- implement bit-manipulation extension?
     CPU_EXTENSION_RISCV_C        => true,          -- implement compressed extension?
     CPU_EXTENSION_RISCV_E        => false,         -- implement embedded RF extension?
     CPU_EXTENSION_RISCV_M        => true,          -- implement muld/div extension?
     CPU_EXTENSION_RISCV_U        => true,          -- implement user mode extension?
-    CPU_EXTENSION_RISCV_Zbb      => true,          -- implement basic bit-manipulation sub-extension?
     CPU_EXTENSION_RISCV_Zfinx    => true,          -- implement 32-bit floating-point extension (using INT reg!)
     CPU_EXTENSION_RISCV_Zicsr    => true,          -- implement CSR system?
+    CPU_EXTENSION_RISCV_Zicntr   => true,          -- implement base counters?
+    CPU_EXTENSION_RISCV_Zihpm    => true,          -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei => true,          -- implement instruction stream sync.?
     -- Extension Options --
     FAST_MUL_EN                  => false,         -- use DSPs for M extension's multiplier
     FAST_SHIFT_EN                => false,         -- use barrel shifter for shift operations
     CPU_CNT_WIDTH                => 64,            -- total width of CPU cycle and instret counters (0..64)
     -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              => 5,             -- number of regions (0..64)
+    PMP_NUM_REGIONS              => 8,             -- number of regions (0..64)
     PMP_MIN_GRANULARITY          => 64*1024,       -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
     -- Hardware Performance Monitors (HPM) --
     HPM_NUM_CNTS                 => 12,            -- number of implemented HPM counters (0..29)
@@ -329,7 +331,11 @@ begin
     IO_GPIO_EN                   => true,          -- implement general purpose input/output port unit (GPIO)?
     IO_MTIME_EN                  => true,          -- implement machine system timer (MTIME)?
     IO_UART0_EN                  => true,          -- implement primary universal asynchronous receiver/transmitter (UART0)?
+    IO_UART0_RX_FIFO             => 32,            -- RX fifo depth, has to be a power of two, min 1
+    IO_UART0_TX_FIFO             => 32,            -- TX fifo depth, has to be a power of two, min 1
     IO_UART1_EN                  => true,          -- implement secondary universal asynchronous receiver/transmitter (UART1)?
+    IO_UART1_RX_FIFO             => 1,             -- RX fifo depth, has to be a power of two, min 1
+    IO_UART1_TX_FIFO             => 1,             -- TX fifo depth, has to be a power of two, min 1
     IO_SPI_EN                    => true,          -- implement serial peripheral interface (SPI)?
     IO_TWI_EN                    => true,          -- implement two-wire interface (TWI)?
     IO_PWM_NUM_CH                => 30,            -- number of PWM channels to implement (0..60); 0 = disabled
@@ -339,7 +345,9 @@ begin
     IO_CFS_CONFIG                => (others => '0'), -- custom CFS configuration generic
     IO_CFS_IN_SIZE               => 32,            -- size of CFS input conduit in bits
     IO_CFS_OUT_SIZE              => 32,            -- size of CFS output conduit in bits
-    IO_NEOLED_EN                 => true           -- implement NeoPixel-compatible smart LED interface (NEOLED)?
+    IO_NEOLED_EN                 => true,          -- implement NeoPixel-compatible smart LED interface (NEOLED)?
+    IO_NEOLED_TX_FIFO            => 8,             -- NEOLED TX FIFO depth, 1..32k, has to be a power of two
+    IO_GPTMR_EN                  => true           -- implement general purpose timer (GPTMR)?
   )
   port map (
     -- Global control --
@@ -408,7 +416,6 @@ begin
     -- External platform interrupts (available if XIRQ_NUM_CH > 0) --
     xirq_i         => gpio(31 downto 0), -- IRQ channels
     -- CPU Interrupts --
-    nm_irq_i       => nmi_ring,        -- non-maskable interrupt
     mtime_irq_i    => '0',             -- machine software interrupt, available if IO_MTIME_EN = false
     msw_irq_i      => msi_ring,        -- machine software interrupt
     mext_irq_i     => mei_ring         -- machine external interrupt
@@ -541,7 +548,7 @@ begin
 
         -- bus output register --
         wb_mem_a.err <= '0';
-        if (ext_mem_a.ack(ext_mem_a_latency_c-1) = '1') and (wb_mem_b.cyc = '1') and (wb_mem_a.ack = '0') then
+        if (ext_mem_a.ack(ext_mem_a_latency_c-1) = '1') and (wb_mem_a.cyc = '1') and (wb_mem_a.ack = '0') then
           wb_mem_a.rdata <= ext_mem_a.rdata(ext_mem_a_latency_c-1);
           wb_mem_a.ack   <= '1';
         else
@@ -653,19 +660,18 @@ begin
 
   -- Wishbone IRQ Triggers ------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  irq_trigger: process(clk_gen)
+  irq_trigger: process(rst_gen, clk_gen)
   begin
-    if rising_edge(clk_gen) then
+    if (rst_gen = '0') then
+      msi_ring <= '0';
+      mei_ring <= '0';
+    elsif rising_edge(clk_gen) then
       -- bus interface --
       wb_irq.rdata <= (others => '0');
       wb_irq.ack   <= wb_irq.cyc and wb_irq.stb and wb_irq.we and and_reduce_f(wb_irq.sel);
       wb_irq.err   <= '0';
-      -- trigger IRQ using CSR.MIE bit layout --
-      nmi_ring <= '0';
-      msi_ring <= '0';
-      mei_ring <= '0';
+      -- trigger RISC-V platform IRQs --
       if ((wb_irq.cyc and wb_irq.stb and wb_irq.we and and_reduce_f(wb_irq.sel)) = '1') then
-        nmi_ring <= wb_irq.wdata(00); -- non-maskable interrupt
         msi_ring <= wb_irq.wdata(03); -- machine software interrupt
         mei_ring <= wb_irq.wdata(11); -- machine software interrupt
       end if;

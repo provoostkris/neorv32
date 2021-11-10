@@ -113,7 +113,7 @@
   #define SPI_FLASH_SECTOR_SIZE 65536 // default = 64kB
 #endif
 
-/** SPI flash clock pre-scaler; see #NEORV32_TWI_CT_enum */
+/** SPI flash clock pre-scaler; see #NEORV32_SPI_CTRL_enum */
 #ifndef SPI_FLASH_CLK_PRSC
   #define SPI_FLASH_CLK_PRSC CLK_PRSC_8
 #endif
@@ -288,7 +288,7 @@ int main(void) {
   // setup UART0 (primary UART, no parity bit, no hardware flow control)
   neorv32_uart0_setup(UART_BAUD, PARITY_NONE, FLOW_CONTROL_NONE);
   // SPI setup
-  neorv32_spi_setup(SPI_FLASH_CLK_PRSC, 0, 0);
+  neorv32_spi_setup(SPI_FLASH_CLK_PRSC, 0, 0, 0);
 
   PRINT_TEXT("\nNEORV32 bootloader\nLoading from SPI flash at ");
   PRINT_XNUM((uint32_t)SPI_BOOT_BASE_ADDR);
@@ -316,7 +316,7 @@ int main(void) {
 
 #if (SPI_EN != 0)
   // setup SPI for 8-bit, clock-mode 0
-  neorv32_spi_setup(SPI_FLASH_CLK_PRSC, 0, 0);
+  neorv32_spi_setup(SPI_FLASH_CLK_PRSC, 0, 0, 0);
 #endif
 
 #if (STATUS_LED_EN != 0)
@@ -333,7 +333,7 @@ int main(void) {
 
   // Configure machine system timer interrupt for ~2Hz
   if (neorv32_mtime_available()) {
-    neorv32_mtime_set_timecmp(neorv32_mtime_get_time() + (SYSINFO_CLK/4));
+    neorv32_mtime_set_timecmp(neorv32_cpu_get_systime() + (NEORV32_SYSINFO.CLK/4));
     // active timer IRQ
     neorv32_cpu_csr_write(CSR_MIE, 1 << CSR_MIE_MTIE); // activate MTIME IRQ source only!
     neorv32_cpu_eint(); // enable global interrupts
@@ -347,21 +347,21 @@ int main(void) {
                      "BLDV: "__DATE__"\nHWV:  ");
   PRINT_XNUM(neorv32_cpu_csr_read(CSR_MIMPID));
   PRINT_TEXT("\nCLK:  ");
-  PRINT_XNUM(SYSINFO_CLK);
+  PRINT_XNUM(NEORV32_SYSINFO.CLK);
   PRINT_TEXT("\nMISA: ");
   PRINT_XNUM(neorv32_cpu_csr_read(CSR_MISA));
-  PRINT_TEXT("\nZEXT: ");
-  PRINT_XNUM(SYSINFO_CPU);
-  PRINT_TEXT("\nPROC: ");
-  PRINT_XNUM(SYSINFO_FEATURES);
+  PRINT_TEXT("\nCPU:  ");
+  PRINT_XNUM(NEORV32_SYSINFO.CPU);
+  PRINT_TEXT("\nSOC:  ");
+  PRINT_XNUM(NEORV32_SYSINFO.SOC);
   PRINT_TEXT("\nIMEM: ");
-  PRINT_XNUM(SYSINFO_IMEM_SIZE);
+  PRINT_XNUM(NEORV32_SYSINFO.IMEM_SIZE);
   PRINT_TEXT(" bytes @");
-  PRINT_XNUM(SYSINFO_ISPACE_BASE);
+  PRINT_XNUM(NEORV32_SYSINFO.ISPACE_BASE);
   PRINT_TEXT("\nDMEM: ");
-  PRINT_XNUM(SYSINFO_DMEM_SIZE);
+  PRINT_XNUM(NEORV32_SYSINFO.DMEM_SIZE);
   PRINT_TEXT(" bytes @");
-  PRINT_XNUM(SYSINFO_DSPACE_BASE);
+  PRINT_XNUM(NEORV32_SYSINFO.DSPACE_BASE);
 
 
   // ------------------------------------------------
@@ -372,7 +372,7 @@ int main(void) {
   if (neorv32_mtime_available()) {
 
     PRINT_TEXT("\n\nAutoboot in "xstr(AUTO_BOOT_TIMEOUT)"s. Press key to abort.\n");
-    uint64_t timeout_time = neorv32_mtime_get_time() + (uint64_t)(AUTO_BOOT_TIMEOUT * SYSINFO_CLK);
+    uint64_t timeout_time = neorv32_cpu_get_systime() + (uint64_t)(AUTO_BOOT_TIMEOUT * NEORV32_SYSINFO.CLK);
 
     while(1){
 
@@ -382,7 +382,7 @@ int main(void) {
         }
       }
 
-      if (neorv32_mtime_get_time() >= timeout_time) { // timeout? start auto boot sequence
+      if (neorv32_cpu_get_systime() >= timeout_time) { // timeout? start auto boot sequence
         get_exe(EXE_STREAM_FLASH); // try booting from flash
         PRINT_TEXT("\n");
         start_app();
@@ -411,6 +411,7 @@ int main(void) {
     char c = PRINT_GETC();
     PRINT_PUTC(c); // echo
     PRINT_TEXT("\n");
+    while (neorv32_uart0_tx_busy());
 
     if (c == 'r') { // restart bootloader
       asm volatile ("li t0, %[input_i]; jr t0" :  : [input_i] "i" (BOOTLOADER_BASE_ADDRESS)); // jump to beginning of boot ROM
@@ -477,7 +478,7 @@ void start_app(void) {
   while (neorv32_uart0_tx_busy());
 
   // start app at instruction space base address
-  register uint32_t app_base = SYSINFO_ISPACE_BASE;
+  register uint32_t app_base = NEORV32_SYSINFO.ISPACE_BASE;
   asm volatile ("jalr zero, %0" : : "r" (app_base));
   while (1);
 }
@@ -492,7 +493,7 @@ void start_app(void) {
  **************************************************************************/
 void __attribute__((__interrupt__)) bootloader_trap_handler(void) {
 
-  uint32_t cause = neorv32_cpu_csr_read(CSR_MCAUSE);
+  register uint32_t cause = neorv32_cpu_csr_read(CSR_MCAUSE);
 
   // Machine timer interrupt
   if (cause == TRAP_CODE_MTI) { // raw exception code for MTI
@@ -503,7 +504,7 @@ void __attribute__((__interrupt__)) bootloader_trap_handler(void) {
 #endif
     // set time for next IRQ
     if (neorv32_mtime_available()) {
-      neorv32_mtime_set_timecmp(neorv32_mtime_get_time() + (SYSINFO_CLK/4));
+      neorv32_mtime_set_timecmp(neorv32_cpu_get_systime() + (NEORV32_SYSINFO.CLK/4));
     }
   }
 
@@ -514,10 +515,10 @@ void __attribute__((__interrupt__)) bootloader_trap_handler(void) {
 
   // Anything else (that was not expected); output exception notifier and try to resume
   else {
-    uint32_t epc = neorv32_cpu_csr_read(CSR_MEPC);
+    register uint32_t epc = neorv32_cpu_csr_read(CSR_MEPC);
 #if (UART_EN != 0)
     if (neorv32_uart0_available()) {
-      PRINT_TEXT("\n[EXC ");
+      PRINT_TEXT("\n[ERR ");
       PRINT_XNUM(cause); // MCAUSE
       PRINT_PUTC(' ');
       PRINT_XNUM(epc); // MEPC
@@ -552,8 +553,7 @@ void get_exe(int src) {
     PRINT_TEXT("Loading... ");
 
     // flash checks
-    if ((neorv32_spi_available() == 0) ||    // check if SPI is available at all
-        (spi_flash_read_1st_id() == 0x00)) { // check if flash ready (or available at all)
+    if (spi_flash_read_1st_id() == 0x00) { // check if flash ready (or available at all)
       system_error(ERROR_FLASH);
     }
   }
@@ -570,7 +570,7 @@ void get_exe(int src) {
   uint32_t check = get_exe_word(src, addr + EXE_OFFSET_CHECKSUM); // complement sum checksum
 
   // transfer program data
-  uint32_t *pnt = (uint32_t*)SYSINFO_ISPACE_BASE;
+  uint32_t *pnt = (uint32_t*)NEORV32_SYSINFO.ISPACE_BASE;
   uint32_t checksum = 0;
   uint32_t d = 0, i = 0;
   addr = addr + EXE_OFFSET_DATA;
@@ -613,7 +613,7 @@ void save_exe(void) {
   // info and prompt
   PRINT_TEXT("Write ");
   PRINT_XNUM(size);
-  PRINT_TEXT(" bytes to SPI flash @ ");
+  PRINT_TEXT(" bytes to SPI flash @0x");
   PRINT_XNUM(addr);
   PRINT_TEXT("? (y/n) ");
 
@@ -646,7 +646,7 @@ void save_exe(void) {
 
   // store data from instruction memory and update checksum
   uint32_t checksum = 0;
-  uint32_t *pnt = (uint32_t*)SYSINFO_ISPACE_BASE;
+  uint32_t *pnt = (uint32_t*)NEORV32_SYSINFO.ISPACE_BASE;
   addr = addr + EXE_OFFSET_DATA;
   uint32_t i = 0;
   while (i < (size/4)) { // in words

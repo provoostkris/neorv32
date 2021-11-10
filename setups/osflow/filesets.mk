@@ -5,9 +5,9 @@ NEORV32_PKG := $(RTL_CORE_SRC)/neorv32_package.vhd
 NEORV32_APP_SRC := \
   $(RTL_CORE_SRC)/neorv32_application_image.vhd \
 
-NEORV32_MEM_SRC := \
-  devices/ice40/neorv32_imem.ice40up_spram.vhd \
-  devices/ice40/neorv32_dmem.ice40up_spram.vhd
+NEORV32_MEM_ENTITIES := \
+  $(RTL_CORE_SRC)/neorv32_dmem.entity.vhd \
+  $(RTL_CORE_SRC)/neorv32_imem.entity.vhd
 
 NEORV32_CORE_SRC := \
   $(RTL_CORE_SRC)/neorv32_bootloader_image.vhd \
@@ -29,6 +29,7 @@ NEORV32_CORE_SRC := \
   $(RTL_CORE_SRC)/neorv32_debug_dtm.vhd \
   $(RTL_CORE_SRC)/neorv32_fifo.vhd \
   $(RTL_CORE_SRC)/neorv32_gpio.vhd \
+  $(RTL_CORE_SRC)/neorv32_gptmr.vhd \
   $(RTL_CORE_SRC)/neorv32_icache.vhd \
   $(RTL_CORE_SRC)/neorv32_mtime.vhd \
   $(RTL_CORE_SRC)/neorv32_neoled.vhd \
@@ -44,7 +45,10 @@ NEORV32_CORE_SRC := \
   $(RTL_CORE_SRC)/neorv32_wishbone.vhd \
   $(RTL_CORE_SRC)/neorv32_xirq.vhd
 
-NEORV32_SRC := ${NEORV32_PKG} ${NEORV32_APP_SRC} ${NEORV32_MEM_SRC} ${NEORV32_CORE_SRC}
+# Before including this partial makefile, NEORV32_MEM_SRC needs to be set
+# (containing two VHDL sources: one for IMEM and one for DMEM)
+
+NEORV32_SRC := ${NEORV32_PKG} ${NEORV32_APP_SRC} ${NEORV32_MEM_ENTITIES} ${NEORV32_MEM_SRC} ${NEORV32_CORE_SRC}
 
 ICE40_SRC := \
   devices/ice40/sb_ice40_components.vhd
