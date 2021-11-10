@@ -65,6 +65,3 @@ If not already available, this script will create a `work` folder in this direct
 Check out the [example programs](https://github.com/stnolting/neorv32/tree/master/sw/example)
 and see section "Let's Get It Started" of the :page_facing_up: [NEORV32 data sheet](https://raw.githubusercontent.com/stnolting/neorv32/master/docs/NEORV32.pdf) for further resources.
 
-## Notes 
-
-only tested so far up and till point 8
