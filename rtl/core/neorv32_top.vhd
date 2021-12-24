@@ -202,7 +202,7 @@ entity neorv32_top is
     twi_scl_io     : inout std_logic := 'U'; -- twi serial clock line
 
     -- PWM (available if IO_PWM_NUM_CH > 0) --
-    pwm_o          : out std_ulogic_vector(IO_PWM_NUM_CH-1 downto 0); -- pwm channels
+    pwm_o          : out std_ulogic_vector(59 downto 0); -- pwm channels
 
     -- Custom Functions Subsystem IO (available if IO_CFS_EN = true) --
     cfs_in_i       : in  std_ulogic_vector(IO_CFS_IN_SIZE-1  downto 0) := (others => 'U'); -- custom CFS inputs conduit
@@ -216,7 +216,7 @@ entity neorv32_top is
     mtime_o        : out std_ulogic_vector(63 downto 0); -- current system time from int. MTIME (if IO_MTIME_EN = true)
 
     -- External platform interrupts (available if XIRQ_NUM_CH > 0) --
-    xirq_i         : in  std_ulogic_vector(XIRQ_NUM_CH-1 downto 0) := (others => 'L'); -- IRQ channels
+    xirq_i         : in  std_ulogic_vector(31 downto 0) := (others => 'L'); -- IRQ channels
 
     -- CPU interrupts --
     mtime_irq_i    : in  std_ulogic := 'L'; -- machine timer interrupt, available if IO_MTIME_EN = false
@@ -238,7 +238,7 @@ architecture neorv32_top_rtl of neorv32_top is
   constant io_slink_en_c : boolean := boolean(SLINK_NUM_RX > 0) or boolean(SLINK_NUM_TX > 0); -- implement slink at all?
 
   -- reset generator --
-  signal rstn_gen : std_ulogic_vector(7 downto 0) := (others => '0'); -- initialize (=reset) via  (for FPGAs only)
+  signal rstn_gen : std_ulogic_vector(7 downto 0) := (others => '0'); -- initialize (=reset) via bitstream (for FPGAs only)
   signal ext_rstn : std_ulogic;
   signal sys_rstn : std_ulogic;
   signal wdt_rstn : std_ulogic;
@@ -340,6 +340,7 @@ architecture neorv32_top_rtl of neorv32_top is
   signal mtime_time  : std_ulogic_vector(63 downto 0); -- current system time from MTIME
   signal ext_timeout : std_ulogic;
   signal ext_access  : std_ulogic;
+  signal debug_mode  : std_ulogic;
 
 begin
 
@@ -492,6 +493,7 @@ begin
     clk_i          => clk_i,        -- global clock, rising edge
     rstn_i         => sys_rstn,     -- global reset, low-active, async
     sleep_o        => open,         -- cpu is in sleep mode when set
+    debug_o        => debug_mode,   -- cpu is in debug mode when set
     -- instruction bus interface --
     i_bus_addr_o   => cpu_i.addr,   -- bus access address
     i_bus_rdata_i  => cpu_i.rdata,  -- bus read data
@@ -537,7 +539,7 @@ begin
   fencei_o <= cpu_i.fence; -- indicates an executed FENCEI operation
 
   -- fast interrupt requests (FIRQs) --
-  -- these stay asserted until explicitly acknowledged --
+  -- these signals are single-shot --
   fast_irq(00) <= wdt_irq;       -- HIGHEST PRIORITY - watchdog
   fast_irq(01) <= cfs_irq;       -- custom functions subsystem
   fast_irq(02) <= uart0_rxd_irq; -- primary UART (UART0) RX
@@ -709,7 +711,7 @@ begin
   -- Processor-Internal Instruction Memory (IMEM) -------------------------------------------
   -- -------------------------------------------------------------------------------------------
   neorv32_int_imem_inst_true:
-  if (MEM_INT_IMEM_EN = true) generate
+  if (MEM_INT_IMEM_EN = true) and (MEM_INT_IMEM_SIZE > 0) generate
     neorv32_int_imem_inst: neorv32_imem
     generic map (
       IMEM_BASE    => imem_base_c,          -- memory base address
@@ -730,7 +732,7 @@ begin
   end generate;
 
   neorv32_int_imem_inst_false:
-  if (MEM_INT_IMEM_EN = false) generate
+  if (MEM_INT_IMEM_EN = false) or (MEM_INT_IMEM_SIZE = 0) generate
     resp_bus(RESP_IMEM) <= resp_bus_entry_terminate_c;
   end generate;
 
@@ -738,7 +740,7 @@ begin
   -- Processor-Internal Data Memory (DMEM) --------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   neorv32_int_dmem_inst_true:
-  if (MEM_INT_DMEM_EN = true) generate
+  if (MEM_INT_DMEM_EN = true) and (MEM_INT_DMEM_SIZE > 0) generate
     neorv32_int_dmem_inst: neorv32_dmem
     generic map (
       DMEM_BASE => dmem_base_c,      -- memory base address
@@ -758,7 +760,7 @@ begin
   end generate;
 
   neorv32_int_dmem_inst_false:
-  if (MEM_INT_DMEM_EN = false) generate
+  if (MEM_INT_DMEM_EN = false) or (MEM_INT_DMEM_SIZE = 0) generate
     resp_bus(RESP_DMEM) <= resp_bus_entry_terminate_c;
   end generate;
 
@@ -937,6 +939,9 @@ begin
   neorv32_wdt_inst_true:
   if (IO_WDT_EN = true) generate
     neorv32_wdt_inst: neorv32_wdt
+    generic map(
+      DEBUG_EN => ON_CHIP_DEBUGGER_EN -- CPU debug mode implemented?
+    )
     port map (
       -- host access --
       clk_i       => clk_i,                    -- global clock line
@@ -947,6 +952,8 @@ begin
       data_i      => p_bus.wdata,              -- data in
       data_o      => resp_bus(RESP_WDT).rdata, -- data out
       ack_o       => resp_bus(RESP_WDT).ack,   -- transfer acknowledge
+      -- CPU in debug mode? --
+      cpu_debug_i => debug_mode,
       -- clock generator --
       clkgen_en_o => wdt_cg_en,                -- enable clock generator
       clkgen_i    => clk_gen,

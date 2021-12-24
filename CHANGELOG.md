@@ -26,6 +26,21 @@ defined by the `hw_version_c` constant in the main VHDL package file [`rtl/core/
 
 | Date (*dd.mm.yyyy*) | Version | Comment |
 |:----------:|:-------:|:--------|
+| 16.12.2021 |[**:rocket:1.6.5**](https://github.com/stnolting/neorv32/releases/tag/v1.6.5) | **New release** |
+| 15.12.2021 | 1.6.4.10 | minor logic optimization of CPU's pipeline front-end (instruction fetch and instruction issue) |
+| 14.12.2021 | 1.6.4.9 | optimized CPU's multiplication/division co-processor: divisions are 1 cycle faster, fast-multiplications (when using DSPs) are 1 cycle faster, slightly less resource utilization, see [PR #240](https://github.com/stnolting/neorv32/pull/240) |
+| 11.12.2021 | 1.6.4.8 | watchdog: added new _DBEN_ and _HALF_ flags to control register (enable WDT during debugging, check timeout counter level), see [PR #239](https://github.com/stnolting/neorv32/pull/239) |
+| 10.12.2021 | 1.6.4.7 | optimized CPU's multiplication/division co-processor: all mul/div operations are 1 cycle faster + slightly less resource utilization, see [PR #238](https://github.com/stnolting/neorv32/pull/238) |
+| 08.12.2021 | 1.6.4.6 | :warning: reworked **Fast Interrupt Requests (FIRQ)** system, see [PR #236](https://github.com/stnolting/neorv32/pull/236) |
+| 03.12.2021 | 1.6.4.5 | added _SYSINFO_SOC_IS_SIM_ flag to SYSINFO to check if processor is being simulated (not guaranteed, depends on the toolchain's 'pragma' support), see [PR #231](https://github.com/stnolting/neorv32/pull/231) |
+| 03.12.2021 | 1.6.4.4 | :bug: fixed bug in **Wishbone** bus interface: timeout configurations (via `MEM_EXT_TIMEOUT` generic) that are a power of two (e.g. 256) caused _immediate_ timeouts; timeout counter was one bit short; same problem for processor-internal bus monitor (BUSKEEPER); see [PR #230](https://github.com/stnolting/neorv32/pull/230) |
+| 02.12.2021 | 1.6.4.3 | :warning: removed legacy software compatibility wrappers (`sw/lib/include/neorv32_legacy.h` and `neorv32_uart_*` functions) |
+| 28.11.2021 | 1.6.4.2 | :bug: fixed bug in **UART[0/1]** overrun flag (was not set/cleared correctly); fixed bug in UART0 enable function `neorv32_uart0_enable()` |
+| 28.11.2021 | 1.6.4.1 | (:warning:) bootloader now stores executable in _little-endian_ byte-order to SPI flash |
+| 26.11.2021 |[**:rocket:1.6.4**](https://github.com/stnolting/neorv32/releases/tag/v1.6.4) | **New release** |
+| 22.11.2021 | 1.6.3.11 | on-chip debugger: reworked JTAG signal input/output synchronization logic (see [PR #216](https://github.com/stnolting/neorv32/pull/216)) |
+| 22.11.2021 | 1.6.3.10 | reworked **TRNG** (less hardware requirements, improved quality), see [PR #212](https://github.com/stnolting/neorv32/pull/212) and [stnolting/neoTRNG](https://github.com/stnolting/neoTRNG) |
+| 21.11.2021 | 1.6.3.9 | minor rtl edits: configuring an IMEM or DMEM size (`MEM_INT_IMEM_SIZE` / `MEM_INT_DMEM_SIZE` generic) of 0 will now exclude the according memory from synthesis (and also clears the according `NEORV32_SYSINFO.SOC` flags) |
 | 18.11.2021 | 1.6.3.8 | TWI: removed TWI_CTRL_CKSTEN flag (enable clock stretching) from control registers, clock-stretching is now _always_ enabled |
 | 14.11.2021 | 1.6.3.7 | major control unit and ALU logic optimizations, reduced hardware footprint; :lock: closed further illegal instruction encoding holes (system environment instructions, ALU and ALU-immediate instructions, FENCE instructions); [PR #204](https://github.com/stnolting/neorv32/pull/204) |
 | 10.11.2021 | 1.6.3.6 | optimized BUSKEEPER: removed redundant logic - bus keeper now also shows an external interface access timeout (if implemented) as "timeout error"; removed _BUSKEEPER_ERR_SRC_ status flag; :warning: added `err_o` (fault access operation) to the custom functions subsystem (CFS) |

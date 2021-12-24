@@ -118,7 +118,7 @@ architecture neorv32_wishbone_rtl of neorv32_wishbone is
     ack      : std_ulogic;
     err      : std_ulogic;
     tmo      : std_ulogic;
-    timeout  : std_ulogic_vector(index_size_f(BUS_TIMEOUT)-1 downto 0);
+    timeout  : std_ulogic_vector(index_size_f(BUS_TIMEOUT) downto 0);
     src      : std_ulogic;
     lock     : std_ulogic;
     priv     : std_ulogic_vector(01 downto 0);
@@ -142,7 +142,7 @@ begin
 
   -- bus timeout --
   assert not (BUS_TIMEOUT /= 0) report "NEORV32 PROCESSOR CONFIG NOTE: External Bus Interface - Implementing auto-timeout (" & integer'image(BUS_TIMEOUT) & " cycles)." severity note;
-  assert not (BUS_TIMEOUT  = 0) report "NEORV32 PROCESSOR CONFIG NOTE: External Bus Interface - Implementing no auto-timeout (can cause permanent CPU stall!)." severity note;
+  assert not (BUS_TIMEOUT  = 0) report "NEORV32 PROCESSOR CONFIG WARNING: External Bus Interface - Implementing NO auto-timeout (can cause permanent CPU stall!)." severity warning;
 
   -- endianness --
   assert not (BIG_ENDIAN = false) report "NEORV32 PROCESSOR CONFIG NOTE: External Bus Interface - Implementing LITTLE-endian byte order." severity note;
@@ -190,7 +190,7 @@ begin
       ctrl.ack      <= '0';
       ctrl.err      <= '0';
       ctrl.tmo      <= '0';
-      ctrl.timeout  <= std_ulogic_vector(to_unsigned(BUS_TIMEOUT, index_size_f(BUS_TIMEOUT)));
+      ctrl.timeout  <= std_ulogic_vector(to_unsigned(BUS_TIMEOUT, index_size_f(BUS_TIMEOUT)+1));
 
       -- state machine --
       case ctrl.state is

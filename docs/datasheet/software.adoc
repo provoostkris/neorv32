@@ -51,6 +51,9 @@ Just include the main NEORV32 library file in your application's source file(s):
 #include <neorv32.h>
 ----
 
+[TIP]
+A CMSIS-SVD-compatible **System View Description (SVD)** file including all peripherals is available in `sw/svd`.
+
 Together with the makefile, this will automatically include all the processor's header files located in
 `sw/lib/include` into your application. The actual source files of the core libraries are located in
 `sw/lib/source` and are automatically included into the source list of your software project. The following
@@ -65,8 +68,7 @@ files are currently part of the NEORV32 core library:
 | `neorv32_cpu.c`    | `neorv32_cpu.h`        | HW driver functions for the NEORV32 **CPU**
 | `neorv32_gpio.c`   | `neorv32_gpio.h`       | HW driver functions for the **GPIO**
 | `neorv32_gptmr.c`  | `neorv32_gptmr.h`      | HW driver functions for the **GPTRM**
-| -                  | `neorv32_intrinsics.h` | macros for custom intrinsics/instructions
-| -                  | `neorv32_legacy.h`     | legacy back-compatibility layer
+| -                  | `neorv32_intrinsics.h` | macros for (custom) intrinsics/instructions
 | `neorv32_mtime.c`  | `neorv32_mtime.h`      | HW driver functions for the **MTIME**
 | `neorv32_neoled.c` | `neorv32_neoled.h`     | HW driver functions for the **NEOLED**
 | `neorv32_pwm.c`    | `neorv32_pwm.h`        | HW driver functions for the **PWM**
@@ -119,23 +121,34 @@ Just executing `make` (or executing `make help`) will show the help menu listing
 [source,makefile]
 ----
 $ make
-<<< NEORV32 Application Makefile >>>
+<<< NEORV32 SW Application Makefile >>>
 Make sure to add the bin folder of RISC-V GCC to your PATH variable.
-Targets:
- help       - show this text
- check      - check toolchain
- info       - show makefile/toolchain configuration
- exe        - compile and generate <neorv32_exe.bin> executable for upload via bootloader
- hex        - compile and generate <neorv32_exe.hex> executable raw file
- image      - compile and generate VHDL IMEM boot image (for application) in local folder
- install    - compile, generate and install VHDL IMEM boot image (for application)
- sim        - in-console simulation using default/simple testbench and GHDL
- all        - exe + hex + install
- elf_info   - show ELF layout info
- clean      - clean up project
- clean_all  - clean up project, core libraries and image generator
- bl_image   - compile and generate VHDL BOOTROM boot image (for bootloader only!) in local folder
- bootloader - compile, generate and install VHDL BOOTROM boot image (for bootloader only!)
+
+== Targets ==
+ help         - show this text
+ check        - check toolchain
+ info         - show makefile/toolchain configuration
+ exe          - compile and generate <neorv32_exe.bin> executable for upload via bootloader
+ hex          - compile and generate <neorv32_exe.hex> executable raw file
+ image        - compile and generate VHDL IMEM boot image (for application) in local folder
+ install      - compile, generate and install VHDL IMEM boot image (for application)
+ sim          - in-console simulation using default/simple testbench and GHDL
+ all          - exe + hex + install
+ elf_info     - show ELF layout info
+ clean        - clean up project
+ clean_all    - clean up project, core libraries and image generator
+ bl_image     - compile and generate VHDL BOOTROM boot image (for bootloader only!) in local folder
+ bootloader   - compile, generate and install VHDL BOOTROM boot image (for bootloader only!)
+
+== Variables ==
+ USER_FLAGS   - Custom toolchain flags [append only], default ""
+ EFFORT       - Optimization level, default "-Os"
+ MARCH        - Machine architecture, default "rv32i"
+ MABI         - Machine binary interface, default "ilp32"
+ APP_INC      - C include folder(s) [append only], default "-I ."
+ ASM_INC      - ASM include folder(s) [append only], default "-I ."
+ RISCV_PREFIX - Toolchain prefix, default "riscv32-unknown-elf-"
+ NEORV32_HOME - NEORV32 home folder, default "../../.."
 ----
 
 
@@ -435,6 +448,12 @@ Terminal console settings (`19200-8-N-1`):
 * newline on `\r\n` (carriage return, newline)
 * no transfer protocol / control flow protocol - just the raw byte stuff
 
+[IMPORTANT]
+_Any_ terminal program that can connect to a serial port should work. However, make sure the program
+can transfer data in _raw_ byte mode without any protocol overhead around it. Some terminal programs struggle with
+transmitting files larger than 4kB (see https://github.com/stnolting/neorv32/pull/215). Try a different program
+if uploading a binary does not work (terminal stall).
+
 The bootloader uses the LSB of the top entity's `gpio_o` output port as high-active status LED (all other
 output pin are set to low level by the bootloader). After reset, this LED will start blinking at ~2Hz and the
 following intro screen should show up in your terminal:
@@ -506,8 +525,8 @@ corresponding operation:
 * `h`: Show the help text (again)
 * `r`: Restart the bootloader and the auto-boot sequence
 * `u`: Upload new program executable (`neorv32_exe.bin`) via UART into the instruction memory
-* `s`: Store executable to SPI flash at `spi_csn_o(0)`
-* `l`: Load executable from SPI flash at `spi_csn_o(0)`
+* `s`: Store executable to SPI flash at `spi_csn_o(0)` (little-endian byte order)
+* `l`: Load executable from SPI flash at `spi_csn_o(0)` (little-endian byte order)
 * `e`: Start the application, which is currently stored in the instruction memory (IMEM)
 
 A new executable can be uploaded via UART by executing the `u` command. After that, the executable can be directly

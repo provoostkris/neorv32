@@ -181,15 +181,16 @@ neorv32                - Project home folder
  ├common               - Linker script, crt0.S start-up code and central makefile
  ├example              - Various example programs
  │└...
+ ├lib                  - Processor core library
+ │├include             - Header files (*.h)
+ │└source              - Source files (*.c)
+ ├image_gen            - Helper program to generate NEORV32 executables
  ├isa-test
  │├riscv-arch-test     - RISC-V spec. compatibility test framework (submodule)
  │└port-neorv32        - Port files for the official RISC-V architecture tests
  ├ocd_firmware         - Source code for on-chip debugger's "park loop"
  ├openocd              - OpenOCD on-chip debugger configuration files
- ├image_gen            - Helper program to generate NEORV32 executables
- └lib                  - Processor core library
-  ├include             - Header files (*.h)
-  └source              - Source files (*.c)
+ └svd                  - Processor system view description file (CMSIS-SVD)
 ...................................
 
 
@@ -277,6 +278,8 @@ This chapter shows _exemplary_ implementation results of the NEORV32 CPU and NEO
 |=======================
 | Hardware version: | `1.5.7.10`
 | Top entity:       | `rtl/core/neorv32_cpu.vhd`
+| FPGA:             | Intel Cyclone IV E `EP4CE22F17C6`
+| Toolchain:        | Quartus Prime 20.1.0
 |=======================
 
 [cols="<5,>1,>1,>1,>1,>1"]
@@ -294,9 +297,6 @@ This chapter shows _exemplary_ implementation results of the NEORV32 CPU and NEO
 | `rv32imacu_Zicsr_Zicntr_Zifencei_Zfinx_DebugMode` | 3974 | 1815 |     1024 |    7 | 116 MHz
 |=======================
 
-[NOTE]
-No HPM counters and no PMP regions were implemented for generating these results.
-
 [TIP]
 The CPU provides further options to reduce the area footprint (for example by constraining the CPU-internal
 counter sizes) or to increase performance (for example by using a barrel-shifter; at cost of extra hardware).
@@ -312,6 +312,8 @@ https://stnolting.github.io/neorv32/ug/#_application_specific_processor_configur
 |=======================
 | Hardware version: | `1.5.7.15`
 | Top entity:       | `rtl/core/neorv32_top.vhd`
+| FPGA:             | Intel Cyclone IV E `EP4CE22F17C6`
+| Toolchain:        | Quartus Prime 20.1.0
 |=======================
 
 .Hardware utilization by the processor modules (mandatory core modules in **bold**)

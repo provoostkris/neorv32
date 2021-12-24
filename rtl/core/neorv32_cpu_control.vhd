@@ -287,6 +287,8 @@ architecture neorv32_cpu_control_rtl of neorv32_cpu_control is
     mie_mtie          : std_ulogic; -- mie.MEIE: machine timer interrupt enable (R/W)
     mie_firqe         : std_ulogic_vector(15 downto 0); -- mie.firq*e: fast interrupt enabled (R/W)
     --
+    mip_clr           : std_ulogic_vector(15 downto 0); -- clear pending FIRQ
+    --
     mcounteren_cy     : std_ulogic; -- mcounteren.cy: allow cycle[h] access from user-mode
     mcounteren_tm     : std_ulogic; -- mcounteren.tm: allow time[h] access from user-mode
     mcounteren_ir     : std_ulogic; -- mcounteren.ir: allow instret[h] access from user-mode
@@ -392,7 +394,7 @@ begin
     elsif rising_edge(clk_i) then
       fetch_engine.state      <= fetch_engine.state_nxt;
       fetch_engine.state_prev <= fetch_engine.state;
-      fetch_engine.restart    <= fetch_engine.restart_nxt;
+      fetch_engine.restart    <= fetch_engine.restart_nxt or fetch_engine.reset;
       if (fetch_engine.restart = '1') then
         fetch_engine.pc <= execute_engine.pc(data_width_c-1 downto 1) & '0'; -- initialize with "real" application PC
       else
@@ -414,9 +416,9 @@ begin
     fetch_engine.state_nxt   <= fetch_engine.state;
     fetch_engine.pc_nxt      <= fetch_engine.pc;
     fetch_engine.bus_err_ack <= '0';
-    fetch_engine.restart_nxt <= fetch_engine.restart or fetch_engine.reset;
+    fetch_engine.restart_nxt <= fetch_engine.restart;
 
-    -- instruction prefetch buffer interface --
+    -- instruction prefetch buffer defaults --
     ipb.we    <= '0';
     ipb.wdata <= be_instr_i & ma_instr_i & instr_i(31 downto 0); -- store exception info and instruction word
     ipb.clear <= fetch_engine.restart;
@@ -430,20 +432,16 @@ begin
           bus_fast_ir            <= '1'; -- fast instruction fetch request
           fetch_engine.state_nxt <= IFETCH_ISSUE;
         end if;
-        if (fetch_engine.restart = '1') then -- reset request?
-          fetch_engine.restart_nxt <= '0';
-        end if;
+        fetch_engine.restart_nxt <= '0';
 
       when IFETCH_ISSUE => -- store instruction data to prefetch buffer
       -- ------------------------------------------------------------
         fetch_engine.bus_err_ack <= be_instr_i or ma_instr_i; -- ACK bus/alignment errors
         if (bus_i_wait_i = '0') or (be_instr_i = '1') or (ma_instr_i = '1') then -- wait for bus response
-          fetch_engine.pc_nxt <= std_ulogic_vector(unsigned(fetch_engine.pc) + 4);
-          ipb.we              <= not fetch_engine.restart; -- write to IPB if not being reset
-          if (fetch_engine.restart = '1') then -- reset request?
-            fetch_engine.restart_nxt <= '0';
-          end if;
-          fetch_engine.state_nxt <= IFETCH_REQUEST;
+          fetch_engine.pc_nxt      <= std_ulogic_vector(unsigned(fetch_engine.pc) + 4);
+          ipb.we                   <= not fetch_engine.restart; -- write to IPB if not being reset
+          fetch_engine.restart_nxt <= '0';
+          fetch_engine.state_nxt   <= IFETCH_REQUEST;
         end if;
 
       when others => -- undefined
@@ -504,7 +502,7 @@ begin
           issue_engine.align <= '1'; -- aligned on 16-bit boundary
         else
           issue_engine.state <= issue_engine.state_nxt;
-          issue_engine.align <= '0'; -- always aligned on 32-bit boundaries
+          issue_engine.align <= '0'; -- aligned on 32-bit boundary
         end if;
       else
         issue_engine.state <= issue_engine.state_nxt;
@@ -541,14 +539,13 @@ begin
 
           if (issue_engine.align = '0') or (CPU_EXTENSION_RISCV_C = false) then -- begin check in LOW instruction half-word
             if (execute_engine.state = DISPATCH) then -- ready to issue new command?
+              ipb.re               <= '1';
               cmd_issue.valid      <= '1';
               issue_engine.buf_nxt <= ipb.rdata(33 downto 32) & ipb.rdata(31 downto 16); -- store high half-word - we might need it for an unaligned uncompressed instruction
               if (ipb.rdata(1 downto 0) = "11") or (CPU_EXTENSION_RISCV_C = false) then -- uncompressed and "aligned"
-                ipb.re <= '1';
                 cmd_issue.data <= '0' & ipb.rdata(33 downto 32) & '0' & ipb.rdata(31 downto 0);
               else -- compressed
-                ipb.re <= '1';
-                cmd_issue.data <= ci_illegal & ipb.rdata(33 downto 32) & '1' & ci_instr32;
+                cmd_issue.data         <= ci_illegal & ipb.rdata(33 downto 32) & '1' & ci_instr32;
                 issue_engine.align_nxt <= '1';
               end if;
             end if;
@@ -558,11 +555,11 @@ begin
               cmd_issue.valid      <= '1';
               issue_engine.buf_nxt <= ipb.rdata(33 downto 32) & ipb.rdata(31 downto 16); -- store high half-word - we might need it for an unaligned uncompressed instruction
               if (issue_engine.buf(1 downto 0) = "11") then -- uncompressed and "unaligned"
-                ipb.re <= '1';
+                ipb.re         <= '1';
                 cmd_issue.data <= '0' & (ipb.rdata(33 downto 32) or issue_engine.buf(17 downto 16)) & '0' & (ipb.rdata(15 downto 0) & issue_engine.buf(15 downto 0));
               else -- compressed
                 -- do not read from ipb here!
-                cmd_issue.data <= ci_illegal & ipb.rdata(33 downto 32) & '1' & ci_instr32;
+                cmd_issue.data         <= ci_illegal & ipb.rdata(33 downto 32) & '1' & ci_instr32;
                 issue_engine.align_nxt <= '0';
               end if;
             end if;
@@ -573,7 +570,7 @@ begin
       -- ------------------------------------------------------------
         issue_engine.buf_nxt <= ipb.rdata(33 downto 32) & ipb.rdata(31 downto 16);
         if (ipb.avail = '1') then -- instructions available?
-          ipb.re <= '1';
+          ipb.re                 <= '1';
           issue_engine.state_nxt <= ISSUE_ACTIVE;
         end if;
 
@@ -787,7 +784,7 @@ begin
     ctrl_o(ctrl_rf_rs1_adr4_c downto ctrl_rf_rs1_adr0_c) <= execute_engine.i_reg(instr_rs1_msb_c downto instr_rs1_lsb_c);
     ctrl_o(ctrl_rf_rs2_adr4_c downto ctrl_rf_rs2_adr0_c) <= execute_engine.i_reg(instr_rs2_msb_c downto instr_rs2_lsb_c);
     ctrl_o(ctrl_rf_rd_adr4_c  downto ctrl_rf_rd_adr0_c)  <= execute_engine.i_reg(instr_rd_msb_c  downto instr_rd_lsb_c);
-    -- fast bus access requests --
+    -- instruction fetch request --
     ctrl_o(ctrl_bus_if_c) <= bus_fast_ir;
     -- bus error control --
     ctrl_o(ctrl_bus_ierr_ack_c) <= fetch_engine.bus_err_ack; -- instruction fetch bus access error ACK
@@ -1040,27 +1037,26 @@ begin
                 ctrl_nxt(ctrl_alu_op2_c downto ctrl_alu_op0_c) <= alu_op_and_c;
             end case;
 
-            -- Check if single-cycle or multi-cycle (co-processor) operation --
-            -- co-processor MULDIV operation? --
+            -- co-processor MULDIV operation (multi-cycle)? --
             if ((CPU_EXTENSION_RISCV_M = true) and ((decode_aux.is_m_mul = '1') or (decode_aux.is_m_div = '1'))) or -- MUL/DIV
                ((CPU_EXTENSION_RISCV_Zmmul = true) and (decode_aux.is_m_mul = '1')) then -- MUL
               ctrl_nxt(ctrl_cp_id_msb_c downto ctrl_cp_id_lsb_c) <= cp_sel_muldiv_c; -- use MULDIV CP
               ctrl_nxt(ctrl_alu_func1_c downto ctrl_alu_func0_c) <= alu_func_copro_c;
               execute_engine.state_nxt                           <= ALU_WAIT;
-            -- co-processor BIT-MANIPULATION operation? --
+            -- co-processor BIT-MANIPULATION operation (multi-cycle)? --
             elsif (CPU_EXTENSION_RISCV_B = true) and
                   (((execute_engine.i_reg(instr_opcode_lsb_c+5) = opcode_alu_c(5))  and (decode_aux.is_bitmanip_reg = '1')) or -- register operation
                    ((execute_engine.i_reg(instr_opcode_lsb_c+5) = opcode_alui_c(5)) and (decode_aux.is_bitmanip_imm = '1'))) then -- immediate operation
               ctrl_nxt(ctrl_cp_id_msb_c downto ctrl_cp_id_lsb_c) <= cp_sel_bitmanip_c; -- use BITMANIP CP
               ctrl_nxt(ctrl_alu_func1_c downto ctrl_alu_func0_c) <= alu_func_copro_c;
               execute_engine.state_nxt                           <= ALU_WAIT;
-            -- co-processor SHIFT operation? --
+            -- co-processor SHIFT operation (multi-cycle)? --
             elsif (execute_engine.i_reg(instr_funct3_msb_c downto instr_funct3_lsb_c) = funct3_sll_c) or
                   (execute_engine.i_reg(instr_funct3_msb_c downto instr_funct3_lsb_c) = funct3_sr_c) then
               ctrl_nxt(ctrl_cp_id_msb_c downto ctrl_cp_id_lsb_c) <= cp_sel_shifter_c; -- use SHIFTER CP (only relevant for shift operations)
               ctrl_nxt(ctrl_alu_func1_c downto ctrl_alu_func0_c) <= alu_func_copro_c;
               execute_engine.state_nxt                           <= ALU_WAIT;
-            -- ALU core operations (single-cycle) --
+            -- ALU CORE operation (single-cycle) --
             else
               ctrl_nxt(ctrl_alu_func1_c downto ctrl_alu_func0_c) <= alu_func_core_c;
               ctrl_nxt(ctrl_rf_wb_en_c)                          <= '1'; -- valid RF write-back
@@ -1152,7 +1148,7 @@ begin
             when funct12_ecall_c  => trap_ctrl.env_call       <= '1'; -- ECALL
             when funct12_ebreak_c => trap_ctrl.break_point    <= '1'; -- EBREAK
             when funct12_mret_c   => execute_engine.state_nxt <= TRAP_EXIT; -- MRET
-            when funct12_dret_c => -- DRET
+            when funct12_dret_c   => -- DRET
               if (CPU_EXTENSION_RISCV_DEBUG = true) then
                 execute_engine.state_nxt <= TRAP_EXIT;
                 debug_ctrl.dret <= '1';
@@ -1177,7 +1173,7 @@ begin
         if (execute_engine.i_reg(instr_funct3_msb_c downto instr_funct3_lsb_c) = funct3_csrrw_c) or
            (execute_engine.i_reg(instr_funct3_msb_c downto instr_funct3_lsb_c) = funct3_csrrwi_c) then -- CSRRW(I)
           csr.we_nxt <= '1'; -- always write CSR
-        else -- CSRRS(I) / CSRRC(I) [invalid CSR instruction are already checked by the illegal instruction logic]
+        else -- CSRRS(I) / CSRRC(I) [invalid CSR instructions are already checked by the illegal instruction logic]
           csr.we_nxt <= not decode_aux.rs1_zero; -- write CSR if rs1/imm is not zero
         end if;
         -- register file write back --
@@ -1294,7 +1290,7 @@ begin
       -- machine trap setup/handling & counters --
       when csr_mstatus_c | csr_mstatush_c | csr_misa_c | csr_mie_c | csr_mtvec_c | csr_mscratch_c | csr_mepc_c | csr_mcause_c | csr_mip_c | csr_mtval_c |
            csr_mcycle_c | csr_mcycleh_c | csr_minstret_c | csr_minstreth_c | csr_mcountinhibit_c =>
-        -- NOTE: MISA, MIP and MTVAL are read-only in the NEORV32 but we do not cause an exception here for compatibility.
+        -- NOTE: MISA and MTVAL are read-only in the NEORV32 but we do not cause an exception here for compatibility.
         -- Machine-level code should read-back those CSRs after writing them to realize they are read-only.
         csr_acc_valid <= csr.priv_m_mode; -- M-mode only 
 
@@ -1632,8 +1628,8 @@ begin
         trap_ctrl.irq_buf(interrupt_mext_irq_c)  <= csr.mie_meie and mext_irq_i;
         trap_ctrl.irq_buf(interrupt_mtime_irq_c) <= csr.mie_mtie and mtime_irq_i;
 
-        -- interrupt buffer: NEORV32-specific fast interrupts (FIRQ) --
-        trap_ctrl.irq_buf(interrupt_firq_15_c downto interrupt_firq_0_c) <= csr.mie_firqe(15 downto 0) and firq_i(15 downto 0);
+        -- interrupt queue: NEORV32-specific fast interrupts (FIRQ) --
+        trap_ctrl.irq_buf(interrupt_firq_15_c downto interrupt_firq_0_c) <= (trap_ctrl.irq_buf(interrupt_firq_15_c downto interrupt_firq_0_c) or (csr.mie_firqe and firq_i)) and (not csr.mip_clr);
 
         -- trap environment control --
         if (trap_ctrl.env_start = '0') then -- no started trap handler
@@ -1722,7 +1718,7 @@ begin
 
 
     -- ----------------------------------------------------------------------------------------
-    -- (re-)enter debug mode requests; basically, these are standard traps that have some
+    -- (re-)enter debug mode requests: basically, these are standard traps that have some
     -- special handling - they have the highest INTERRUPT priority in order to go to debug when requested
     -- even if other IRQs are pending right now
     -- ----------------------------------------------------------------------------------------
@@ -1878,6 +1874,7 @@ begin
       csr.mepc              <= (others => def_rst_val_c);
       csr.mcause            <= (others => def_rst_val_c);
       csr.mtval             <= (others => def_rst_val_c);
+      csr.mip_clr           <= (others => def_rst_val_c);
       --
       csr.pmpcfg            <= (others => (others => '0'));
       csr.pmpaddr           <= (others => (others => def_rst_val_c));
@@ -1906,6 +1903,9 @@ begin
     elsif rising_edge(clk_i) then
       -- write access? --
       csr.we <= csr.we_nxt;
+
+      -- defaults --
+      csr.mip_clr <= (others => '0');
 
       if (CPU_EXTENSION_RISCV_Zicsr = true) then
         -- --------------------------------------------------------------------------------
@@ -1965,19 +1965,23 @@ begin
 
           -- machine trap handling --
           -- --------------------------------------------------------------------
-          if (csr.addr(11 downto 3) = csr_class_trap_c) then -- machine trap handling CSR class
+          if (csr.addr(11 downto 4) = csr_class_trap_c) then -- machine trap handling CSR class
             -- R/W: mscratch - machine scratch register --
-            if (csr.addr(2 downto 0) = csr_mscratch_c(2 downto 0)) then
+            if (csr.addr(3 downto 0) = csr_mscratch_c(3 downto 0)) then
               csr.mscratch <= csr.wdata;
             end if;
             -- R/W: mepc - machine exception program counter --
-            if (csr.addr(2 downto 0) = csr_mepc_c(2 downto 0)) then
+            if (csr.addr(3 downto 0) = csr_mepc_c(3 downto 0)) then
               csr.mepc <= csr.wdata;
             end if;
             -- R/W: mcause - machine trap cause --
-            if (csr.addr(2 downto 0) = csr_mcause_c(2 downto 0)) then
+            if (csr.addr(3 downto 0) = csr_mcause_c(3 downto 0)) then
               csr.mcause(csr.mcause'left) <= csr.wdata(31); -- 1: async/interrupt, 0: sync/exception
               csr.mcause(4 downto 0)      <= csr.wdata(4 downto 0); -- identifier
+            end if;
+            -- R/W: mip - machine interrupt pending --
+            if (csr.addr(3 downto 0) =  csr_mip_c(3 downto 0)) then
+              csr.mip_clr <= csr.wdata(31 downto 16);
             end if;
           end if;
 
@@ -2491,7 +2495,7 @@ begin
             csr.rdata(csr.mcause'left-1 downto 0) <= csr.mcause(csr.mcause'left-1 downto 0);
           when csr_mtval_c => -- mtval (r/-): machine bad address or instruction
             csr.rdata <= csr.mtval;
-          when csr_mip_c => -- mip (r/-): machine interrupt pending
+          when csr_mip_c => -- mip (r/w): machine interrupt pending
             csr.rdata(03) <= trap_ctrl.irq_buf(interrupt_msw_irq_c);
             csr.rdata(07) <= trap_ctrl.irq_buf(interrupt_mtime_irq_c);
             csr.rdata(11) <= trap_ctrl.irq_buf(interrupt_mext_irq_c);

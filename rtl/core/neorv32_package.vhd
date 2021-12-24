@@ -53,7 +53,7 @@ package neorv32_package is
   -- increasing instruction fetch & data access latency by +1 cycle but also reducing critical path length
   constant pmp_num_regions_critical_c : natural := 8; -- default=8
 
-  -- "response time window" for processor-internal memories and IO devices
+  -- "response time window" for processor-internal modules --
   constant max_proc_int_response_time_c : natural := 15; -- cycles after which an *unacknowledged* internal bus access will timeout and trigger a bus fault exception (min 2)
 
   -- jtag tap - identifier --
@@ -64,8 +64,22 @@ package neorv32_package is
   -- Architecture Constants (do not modify!) ------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   constant data_width_c : natural := 32; -- native data path width - do not change!
-  constant hw_version_c : std_ulogic_vector(31 downto 0) := x"01060308"; -- no touchy!
+  constant hw_version_c : std_ulogic_vector(31 downto 0) := x"01060501"; -- no touchy!
   constant archid_c     : natural := 19; -- official NEORV32 architecture ID - hands off!
+
+  -- Check if we're inside the Matrix -------------------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  constant is_simulation_c : boolean := false -- seems like we're on real hardware
+-- pragma translate_off
+-- synthesis translate_off
+-- synthesis synthesis_off
+-- RTL_SYNTHESIS OFF
+  or true -- this MIGHT be a simulation
+-- RTL_SYNTHESIS ON
+-- synthesis synthesis_on
+-- synthesis translate_on
+-- pragma translate_on
+  ;
 
   -- External Interface Types ---------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
@@ -108,7 +122,8 @@ package neorv32_package is
 
   -- Internal (auto-generated) Configurations -----------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  constant def_rst_val_c : std_ulogic := cond_sel_stdulogic_f(dedicated_reset_c, '0', '-');
+  constant def_rst_val_c : std_ulogic;  -- Use a deferred constant, prevents compile error with Questa
+                                        -- See IEEE 1076-2008 14.4.2.1
 
   -- Processor-Internal Address Space Layout ------------------------------------------------
   -- -------------------------------------------------------------------------------------------
@@ -186,6 +201,7 @@ package neorv32_package is
   constant pwm_duty4_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe94";
   constant pwm_duty5_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe98";
   constant pwm_duty6_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe9c";
+  
   constant pwm_duty7_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffea0";
   constant pwm_duty8_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffea4";
   constant pwm_duty9_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffea8";
@@ -575,7 +591,7 @@ package neorv32_package is
   constant csr_mhpmevent30_c    : std_ulogic_vector(11 downto 0) := x"33e";
   constant csr_mhpmevent31_c    : std_ulogic_vector(11 downto 0) := x"33f";
   -- machine trap handling --
-  constant csr_class_trap_c     : std_ulogic_vector(08 downto 0) := x"34" & '0'; -- machine trap handling
+  constant csr_class_trap_c     : std_ulogic_vector(07 downto 0) := x"34"; -- machine trap handling
   constant csr_mscratch_c       : std_ulogic_vector(11 downto 0) := x"340";
   constant csr_mepc_c           : std_ulogic_vector(11 downto 0) := x"341";
   constant csr_mcause_c         : std_ulogic_vector(11 downto 0) := x"342";
@@ -1032,7 +1048,7 @@ package neorv32_package is
       twi_sda_io     : inout std_logic := 'U'; -- twi serial data line
       twi_scl_io     : inout std_logic := 'U'; -- twi serial clock line
       -- PWM (available if IO_PWM_NUM_CH > 0) --
-      pwm_o          : out std_ulogic_vector(IO_PWM_NUM_CH-1 downto 0); -- pwm channels
+      pwm_o          : out std_ulogic_vector(59 downto 0); -- pwm channels
       -- Custom Functions Subsystem IO --
       cfs_in_i       : in  std_ulogic_vector(IO_CFS_IN_SIZE-1  downto 0) := (others => 'U'); -- custom CFS inputs conduit
       cfs_out_o      : out std_ulogic_vector(IO_CFS_OUT_SIZE-1 downto 0); -- custom CFS outputs conduit
@@ -1042,7 +1058,7 @@ package neorv32_package is
       mtime_i        : in  std_ulogic_vector(63 downto 0) := (others => 'U'); -- current system time from ext. MTIME (if IO_MTIME_EN = false)
       mtime_o        : out std_ulogic_vector(63 downto 0); -- current system time from int. MTIME (if IO_MTIME_EN = true)
       -- External platform interrupts (available if XIRQ_NUM_CH > 0) --
-      xirq_i         : in  std_ulogic_vector(XIRQ_NUM_CH-1 downto 0) := (others => 'L'); -- IRQ channels
+      xirq_i         : in  std_ulogic_vector(31 downto 0) := (others => 'L'); -- IRQ channels
       -- CPU Interrupts --
       mtime_irq_i    : in  std_ulogic := 'L'; -- machine timer interrupt, available if IO_MTIME_EN = false
       msw_irq_i      : in  std_ulogic := 'L'; -- machine software interrupt
@@ -1089,6 +1105,7 @@ package neorv32_package is
       clk_i          : in  std_ulogic; -- global clock, rising edge
       rstn_i         : in  std_ulogic; -- global reset, low-active, async
       sleep_o        : out std_ulogic; -- cpu is in sleep mode when set
+      debug_o        : out std_ulogic; -- cpu is in debug mode when set
       -- instruction bus interface --
       i_bus_addr_o   : out std_ulogic_vector(data_width_c-1 downto 0); -- bus access address
       i_bus_rdata_i  : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus read data
@@ -1616,6 +1633,9 @@ package neorv32_package is
   -- Component: Watchdog Timer (WDT) --------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   component neorv32_wdt
+    generic (
+      DEBUG_EN : boolean -- CPU debug mode implemented?
+    );
     port (
       -- host access --
       clk_i       : in  std_ulogic; -- global clock line
@@ -1626,6 +1646,8 @@ package neorv32_package is
       data_i      : in  std_ulogic_vector(31 downto 0); -- data in
       data_o      : out std_ulogic_vector(31 downto 0); -- data out
       ack_o       : out std_ulogic; -- transfer acknowledge
+      -- CPU in debug mode? --
+      cpu_debug_i : in  std_ulogic;
       -- clock generator --
       clkgen_en_o : out std_ulogic; -- enable clock generator
       clkgen_i    : in  std_ulogic_vector(07 downto 0);
@@ -1734,7 +1756,7 @@ package neorv32_package is
       clkgen_en_o : out std_ulogic; -- enable clock generator
       clkgen_i    : in  std_ulogic_vector(07 downto 0);
       -- pwm output channels --
-      pwm_o       : out std_ulogic_vector(NUM_CHANNELS-1 downto 0)
+      pwm_o       : out std_ulogic_vector(59 downto 0)
     );
   end component;
 
@@ -1907,7 +1929,7 @@ package neorv32_package is
       data_o    : out std_ulogic_vector(31 downto 0); -- data out
       ack_o     : out std_ulogic; -- transfer acknowledge
       -- external interrupt lines --
-      xirq_i    : in  std_ulogic_vector(XIRQ_NUM_CH-1 downto 0);
+      xirq_i    : in  std_ulogic_vector(31 downto 0);
       -- CPU interrupt --
       cpu_irq_o : out std_ulogic
     );
@@ -2090,7 +2112,7 @@ end neorv32_package;
 
 package body neorv32_package is
 
-  -- Function: Minimal required number of bits to represent input number --------------------
+  -- Function: Minimal required number of bits to represent <input> numbers -----------------
   -- -------------------------------------------------------------------------------------------
   function index_size_f(input : natural) return natural is
   begin
@@ -2401,6 +2423,10 @@ package body neorv32_package is
     end loop; -- idx_v
     return mem_v;
   end function mem32_init_f;
+
+
+  -- Finally set deferred constant, see IEEE 1076-2008 14.4.2.1
+  constant def_rst_val_c : std_ulogic := cond_sel_stdulogic_f(dedicated_reset_c, '0', '-');
 
 
 end neorv32_package;
