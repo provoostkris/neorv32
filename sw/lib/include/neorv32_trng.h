@@ -3,7 +3,7 @@
 // # ********************************************************************************************* #
 // # BSD 3-Clause License                                                                          #
 // #                                                                                               #
-// # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+// # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 // #                                                                                               #
 // # Redistribution and use in source and binary forms, with or without modification, are          #
 // # permitted provided that the following conditions are met:                                     #
@@ -35,7 +35,6 @@
 
 /**********************************************************************//**
  * @file neorv32_trng.h
- * @author Stephan Nolting
  * @brief True Random Number Generator (TRNG) HW driver header file.
  *
  * @note These functions should only be used if the TRNG unit was synthesized (IO_TRNG_EN = true).
@@ -45,9 +44,11 @@
 #define neorv32_trng_h
 
 // prototypes
-int neorv32_trng_available(void);
+int  neorv32_trng_available(void);
 void neorv32_trng_enable(void);
 void neorv32_trng_disable(void);
-int neorv32_trng_get(uint8_t *data);
+void neorv32_trng_fifo_clear(void);
+int  neorv32_trng_get(uint8_t *data);
+int  neorv32_trng_check_sim_mode(void);
 
 #endif // neorv32_trng_h

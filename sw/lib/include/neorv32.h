@@ -3,7 +3,7 @@
 // # ********************************************************************************************* #
 // # BSD 3-Clause License                                                                          #
 // #                                                                                               #
-// # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+// # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 // #                                                                                               #
 // # Redistribution and use in source and binary forms, with or without modification, are          #
 // # permitted provided that the following conditions are met:                                     #
@@ -52,16 +52,23 @@ extern "C" {
 #include <stdint.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <unistd.h>
+#include <stdlib.h>
 
 
 /**********************************************************************//**
  * Available CPU Control and Status Registers (CSRs)
  **************************************************************************/
 enum NEORV32_CSR_enum {
+  /* hardware-only CSR, NEORV32-specific, not accessible by software */
+//CSR_ZERO           = 0x000, /**< 0x000 - zero (-/-): Always zero */
+
+  /* floating-point unit control and status */
   CSR_FFLAGS         = 0x001, /**< 0x001 - fflags (r/w): Floating-point accrued exception flags */
   CSR_FRM            = 0x002, /**< 0x002 - frm    (r/w): Floating-point dynamic rounding mode */
-  CSR_FCSR           = 0x003, /**< 0x003 - fcsr   (r/w): Floating-point control/staturs register (frm + fflags) */
+  CSR_FCSR           = 0x003, /**< 0x003 - fcsr   (r/w): Floating-point control/status register (frm + fflags) */
 
+  /* machine control and status */
   CSR_MSTATUS        = 0x300, /**< 0x300 - mstatus    (r/w): Machine status register */
   CSR_MISA           = 0x301, /**< 0x301 - misa       (r/-): CPU ISA and extensions (read-only in NEORV32) */
   CSR_MIE            = 0x304, /**< 0x304 - mie        (r/w): Machine interrupt-enable register */
@@ -76,6 +83,7 @@ enum NEORV32_CSR_enum {
 
   CSR_MCOUNTINHIBIT  = 0x320, /**< 0x320 - mcountinhibit (r/w): Machine counter-inhibit register */
 
+  /* hardware performance monitors - event configuration */
   CSR_MHPMEVENT3     = 0x323, /**< 0x323 - mhpmevent3  (r/w): Machine hardware performance monitor event selector 3  */
   CSR_MHPMEVENT4     = 0x324, /**< 0x324 - mhpmevent4  (r/w): Machine hardware performance monitor event selector 4  */
   CSR_MHPMEVENT5     = 0x325, /**< 0x325 - mhpmevent5  (r/w): Machine hardware performance monitor event selector 5  */
@@ -106,94 +114,52 @@ enum NEORV32_CSR_enum {
   CSR_MHPMEVENT30    = 0x33e, /**< 0x33e - mhpmevent30 (r/w): Machine hardware performance monitor event selector 30 */
   CSR_MHPMEVENT31    = 0x33f, /**< 0x33f - mhpmevent31 (r/w): Machine hardware performance monitor event selector 31 */
 
+  /* machine trap control */
   CSR_MSCRATCH       = 0x340, /**< 0x340 - mscratch (r/w): Machine scratch register */
   CSR_MEPC           = 0x341, /**< 0x341 - mepc     (r/w): Machine exception program counter */
   CSR_MCAUSE         = 0x342, /**< 0x342 - mcause   (r/w): Machine trap cause */
-  CSR_MTVAL          = 0x343, /**< 0x343 - mtval    (r/-): Machine bad address or instruction */
+  CSR_MTVAL          = 0x343, /**< 0x343 - mtval    (r/-): Machine trap value register */
   CSR_MIP            = 0x344, /**< 0x344 - mip      (r/-): Machine interrupt pending register */
 
-  CSR_PMPCFG0        = 0x3a0, /**< 0x3a0 - pmpcfg0  (r/w): Physical memory protection configuration register 0  */
-  CSR_PMPCFG1        = 0x3a1, /**< 0x3a1 - pmpcfg1  (r/w): Physical memory protection configuration register 1  */
-  CSR_PMPCFG2        = 0x3a2, /**< 0x3a2 - pmpcfg2  (r/w): Physical memory protection configuration register 2  */
-  CSR_PMPCFG3        = 0x3a3, /**< 0x3a3 - pmpcfg3  (r/w): Physical memory protection configuration register 3  */
-  CSR_PMPCFG4        = 0x3a4, /**< 0x3a4 - pmpcfg4  (r/w): Physical memory protection configuration register 4  */
-  CSR_PMPCFG5        = 0x3a5, /**< 0x3a5 - pmpcfg5  (r/w): Physical memory protection configuration register 5  */
-  CSR_PMPCFG6        = 0x3a6, /**< 0x3a6 - pmpcfg6  (r/w): Physical memory protection configuration register 6  */
-  CSR_PMPCFG7        = 0x3a7, /**< 0x3a7 - pmpcfg7  (r/w): Physical memory protection configuration register 7  */
-  CSR_PMPCFG8        = 0x3a8, /**< 0x3a8 - pmpcfg8  (r/w): Physical memory protection configuration register 8  */
-  CSR_PMPCFG9        = 0x3a9, /**< 0x3a9 - pmpcfg9  (r/w): Physical memory protection configuration register 9  */
-  CSR_PMPCFG10       = 0x3aa, /**< 0x3aa - pmpcfg10 (r/w): Physical memory protection configuration register 10 */
-  CSR_PMPCFG11       = 0x3ab, /**< 0x3ab - pmpcfg11 (r/w): Physical memory protection configuration register 11 */
-  CSR_PMPCFG12       = 0x3ac, /**< 0x3ac - pmpcfg12 (r/w): Physical memory protection configuration register 12 */
-  CSR_PMPCFG13       = 0x3ad, /**< 0x3ad - pmpcfg13 (r/w): Physical memory protection configuration register 13 */
-  CSR_PMPCFG14       = 0x3ae, /**< 0x3ae - pmpcfg14 (r/w): Physical memory protection configuration register 14 */
-  CSR_PMPCFG15       = 0x3af, /**< 0x3af - pmpcfg15 (r/w): Physical memory protection configuration register 15 */
+  /* physical memory protection */
+  CSR_PMPCFG0        = 0x3a0, /**< 0x3a0 - pmpcfg0 (r/w): Physical memory protection configuration register 0 (entries 0..3) */
+  CSR_PMPCFG1        = 0x3a1, /**< 0x3a1 - pmpcfg1 (r/w): Physical memory protection configuration register 1 (entries 4..7) */
+  CSR_PMPCFG2        = 0x3a2, /**< 0x3a2 - pmpcfg2 (r/w): Physical memory protection configuration register 2 (entries 8..11) */
+  CSR_PMPCFG3        = 0x3a3, /**< 0x3a3 - pmpcfg3 (r/w): Physical memory protection configuration register 3 (entries 12..15) */
 
-  CSR_PMPADDR0       = 0x3b0, /**< 0x3b0 - pmpaddr0  (r/w): Physical memory protection address register 0  */
-  CSR_PMPADDR1       = 0x3b1, /**< 0x3b1 - pmpaddr1  (r/w): Physical memory protection address register 1  */
-  CSR_PMPADDR2       = 0x3b2, /**< 0x3b2 - pmpaddr2  (r/w): Physical memory protection address register 2  */
-  CSR_PMPADDR3       = 0x3b3, /**< 0x3b3 - pmpaddr3  (r/w): Physical memory protection address register 3  */
-  CSR_PMPADDR4       = 0x3b4, /**< 0x3b4 - pmpaddr4  (r/w): Physical memory protection address register 4  */
-  CSR_PMPADDR5       = 0x3b5, /**< 0x3b5 - pmpaddr5  (r/w): Physical memory protection address register 5  */
-  CSR_PMPADDR6       = 0x3b6, /**< 0x3b6 - pmpaddr6  (r/w): Physical memory protection address register 6  */
-  CSR_PMPADDR7       = 0x3b7, /**< 0x3b7 - pmpaddr7  (r/w): Physical memory protection address register 7  */
-  CSR_PMPADDR8       = 0x3b8, /**< 0x3b8 - pmpaddr8  (r/w): Physical memory protection address register 8  */
-  CSR_PMPADDR9       = 0x3b9, /**< 0x3b9 - pmpaddr9  (r/w): Physical memory protection address register 9  */
+  CSR_PMPADDR0       = 0x3b0, /**< 0x3b0 - pmpaddr0  (r/w): Physical memory protection address register 0 */
+  CSR_PMPADDR1       = 0x3b1, /**< 0x3b1 - pmpaddr1  (r/w): Physical memory protection address register 1 */
+  CSR_PMPADDR2       = 0x3b2, /**< 0x3b2 - pmpaddr2  (r/w): Physical memory protection address register 2 */
+  CSR_PMPADDR3       = 0x3b3, /**< 0x3b3 - pmpaddr3  (r/w): Physical memory protection address register 3 */
+  CSR_PMPADDR4       = 0x3b4, /**< 0x3b4 - pmpaddr4  (r/w): Physical memory protection address register 4 */
+  CSR_PMPADDR5       = 0x3b5, /**< 0x3b5 - pmpaddr5  (r/w): Physical memory protection address register 5 */
+  CSR_PMPADDR6       = 0x3b6, /**< 0x3b6 - pmpaddr6  (r/w): Physical memory protection address register 6 */
+  CSR_PMPADDR7       = 0x3b7, /**< 0x3b7 - pmpaddr7  (r/w): Physical memory protection address register 7 */
+  CSR_PMPADDR8       = 0x3b8, /**< 0x3b8 - pmpaddr8  (r/w): Physical memory protection address register 8 */
+  CSR_PMPADDR9       = 0x3b9, /**< 0x3b9 - pmpaddr9  (r/w): Physical memory protection address register 9 */
   CSR_PMPADDR10      = 0x3ba, /**< 0x3ba - pmpaddr10 (r/w): Physical memory protection address register 10 */
   CSR_PMPADDR11      = 0x3bb, /**< 0x3bb - pmpaddr11 (r/w): Physical memory protection address register 11 */
   CSR_PMPADDR12      = 0x3bc, /**< 0x3bc - pmpaddr12 (r/w): Physical memory protection address register 12 */
   CSR_PMPADDR13      = 0x3bd, /**< 0x3bd - pmpaddr13 (r/w): Physical memory protection address register 13 */
   CSR_PMPADDR14      = 0x3be, /**< 0x3be - pmpaddr14 (r/w): Physical memory protection address register 14 */
   CSR_PMPADDR15      = 0x3bf, /**< 0x3bf - pmpaddr15 (r/w): Physical memory protection address register 15 */
-  CSR_PMPADDR16      = 0x3c0, /**< 0x3c0 - pmpaddr16 (r/w): Physical memory protection address register 16 */
-  CSR_PMPADDR17      = 0x3c1, /**< 0x3c1 - pmpaddr17 (r/w): Physical memory protection address register 17 */
-  CSR_PMPADDR18      = 0x3c2, /**< 0x3c2 - pmpaddr18 (r/w): Physical memory protection address register 18 */
-  CSR_PMPADDR19      = 0x3c3, /**< 0x3c3 - pmpaddr19 (r/w): Physical memory protection address register 19 */
-  CSR_PMPADDR20      = 0x3c4, /**< 0x3c4 - pmpaddr20 (r/w): Physical memory protection address register 20 */
-  CSR_PMPADDR21      = 0x3c5, /**< 0x3c5 - pmpaddr21 (r/w): Physical memory protection address register 21 */
-  CSR_PMPADDR22      = 0x3c6, /**< 0x3c6 - pmpaddr22 (r/w): Physical memory protection address register 22 */
-  CSR_PMPADDR23      = 0x3c7, /**< 0x3c7 - pmpaddr23 (r/w): Physical memory protection address register 23 */
-  CSR_PMPADDR24      = 0x3c8, /**< 0x3c8 - pmpaddr24 (r/w): Physical memory protection address register 24 */
-  CSR_PMPADDR25      = 0x3c9, /**< 0x3c9 - pmpaddr25 (r/w): Physical memory protection address register 25 */
-  CSR_PMPADDR26      = 0x3ca, /**< 0x3ca - pmpaddr26 (r/w): Physical memory protection address register 26 */
-  CSR_PMPADDR27      = 0x3cb, /**< 0x3cb - pmpaddr27 (r/w): Physical memory protection address register 27 */
-  CSR_PMPADDR28      = 0x3cc, /**< 0x3cc - pmpaddr28 (r/w): Physical memory protection address register 28 */
-  CSR_PMPADDR29      = 0x3cd, /**< 0x3cd - pmpaddr29 (r/w): Physical memory protection address register 29 */
-  CSR_PMPADDR30      = 0x3ce, /**< 0x3ce - pmpaddr30 (r/w): Physical memory protection address register 30 */
-  CSR_PMPADDR31      = 0x3cf, /**< 0x3cf - pmpaddr31 (r/w): Physical memory protection address register 31 */
-  CSR_PMPADDR32      = 0x3d0, /**< 0x3d0 - pmpaddr32 (r/w): Physical memory protection address register 32 */
-  CSR_PMPADDR33      = 0x3d1, /**< 0x3d1 - pmpaddr33 (r/w): Physical memory protection address register 33 */
-  CSR_PMPADDR34      = 0x3d2, /**< 0x3d2 - pmpaddr34 (r/w): Physical memory protection address register 34 */
-  CSR_PMPADDR35      = 0x3d3, /**< 0x3d3 - pmpaddr35 (r/w): Physical memory protection address register 35 */
-  CSR_PMPADDR36      = 0x3d4, /**< 0x3d4 - pmpaddr36 (r/w): Physical memory protection address register 36 */
-  CSR_PMPADDR37      = 0x3d5, /**< 0x3d5 - pmpaddr37 (r/w): Physical memory protection address register 37 */
-  CSR_PMPADDR38      = 0x3d6, /**< 0x3d6 - pmpaddr38 (r/w): Physical memory protection address register 38 */
-  CSR_PMPADDR39      = 0x3d7, /**< 0x3d7 - pmpaddr39 (r/w): Physical memory protection address register 39 */
-  CSR_PMPADDR40      = 0x3d8, /**< 0x3d8 - pmpaddr40 (r/w): Physical memory protection address register 40 */
-  CSR_PMPADDR41      = 0x3d9, /**< 0x3d9 - pmpaddr41 (r/w): Physical memory protection address register 41 */
-  CSR_PMPADDR42      = 0x3da, /**< 0x3da - pmpaddr42 (r/w): Physical memory protection address register 42 */
-  CSR_PMPADDR43      = 0x3db, /**< 0x3db - pmpaddr43 (r/w): Physical memory protection address register 43 */
-  CSR_PMPADDR44      = 0x3dc, /**< 0x3dc - pmpaddr44 (r/w): Physical memory protection address register 44 */
-  CSR_PMPADDR45      = 0x3dd, /**< 0x3dd - pmpaddr45 (r/w): Physical memory protection address register 45 */
-  CSR_PMPADDR46      = 0x3de, /**< 0x3de - pmpaddr46 (r/w): Physical memory protection address register 46 */
-  CSR_PMPADDR47      = 0x3df, /**< 0x3df - pmpaddr47 (r/w): Physical memory protection address register 47 */
-  CSR_PMPADDR48      = 0x3e0, /**< 0x3e0 - pmpaddr48 (r/w): Physical memory protection address register 48 */
-  CSR_PMPADDR49      = 0x3e1, /**< 0x3e1 - pmpaddr49 (r/w): Physical memory protection address register 49 */
-  CSR_PMPADDR50      = 0x3e2, /**< 0x3e2 - pmpaddr50 (r/w): Physical memory protection address register 50 */
-  CSR_PMPADDR51      = 0x3e3, /**< 0x3e3 - pmpaddr51 (r/w): Physical memory protection address register 51 */
-  CSR_PMPADDR52      = 0x3e4, /**< 0x3e4 - pmpaddr52 (r/w): Physical memory protection address register 52 */
-  CSR_PMPADDR53      = 0x3e5, /**< 0x3e5 - pmpaddr53 (r/w): Physical memory protection address register 53 */
-  CSR_PMPADDR54      = 0x3e6, /**< 0x3e6 - pmpaddr54 (r/w): Physical memory protection address register 54 */
-  CSR_PMPADDR55      = 0x3e7, /**< 0x3e7 - pmpaddr55 (r/w): Physical memory protection address register 55 */
-  CSR_PMPADDR56      = 0x3e8, /**< 0x3e8 - pmpaddr56 (r/w): Physical memory protection address register 56 */
-  CSR_PMPADDR57      = 0x3e9, /**< 0x3e9 - pmpaddr57 (r/w): Physical memory protection address register 57 */
-  CSR_PMPADDR58      = 0x3ea, /**< 0x3ea - pmpaddr58 (r/w): Physical memory protection address register 58 */
-  CSR_PMPADDR59      = 0x3eb, /**< 0x3eb - pmpaddr59 (r/w): Physical memory protection address register 59 */
-  CSR_PMPADDR60      = 0x3ec, /**< 0x3ec - pmpaddr60 (r/w): Physical memory protection address register 60 */
-  CSR_PMPADDR61      = 0x3ed, /**< 0x3ed - pmpaddr61 (r/w): Physical memory protection address register 61 */
-  CSR_PMPADDR62      = 0x3ee, /**< 0x3ee - pmpaddr62 (r/w): Physical memory protection address register 62 */
-  CSR_PMPADDR63      = 0x3ef, /**< 0x3ef - pmpaddr63 (r/w): Physical memory protection address register 63 */
 
+  /* on-chip debugger - hardware trigger module */
+  CSR_TSELECT        = 0x7a0, /**< 0x7a0 - tselect  (r/(w)): Trigger select */
+  CSR_TDATA1         = 0x7a1, /**< 0x7a1 - tdata1   (r/(w)): Trigger data register 0 */
+  CSR_TDATA2         = 0x7a2, /**< 0x7a2 - tdata2   (r/(w)): Trigger data register 1 */
+  CSR_TDATA3         = 0x7a3, /**< 0x7a3 - tdata3   (r/(w)): Trigger data register 2 */
+  CSR_TINFO          = 0x7a4, /**< 0x7a4 - tinfo    (r/(w)): Trigger info */
+  CSR_TCONTROL       = 0x7a5, /**< 0x7a5 - tcontrol (r/(w)): Trigger control */
+  CSR_MCONTEXT       = 0x7a8, /**< 0x7a8 - mcontext (r/(w)): Machine context register */
+  CSR_SCONTEXT       = 0x7aa, /**< 0x7aa - scontext (r/(w)): Supervisor context register */
+
+  /* not accessible by m-mode software */
+//CSR_DCSR           = 0x7b0, /**< 0x7b0 - dcsr     (-/-): Debug status and control register */
+//CSR_DPC            = 0x7b1, /**< 0x7b1 - dpc      (-/-): Debug program counter */
+//CSR_DSCRATCH       = 0x7b2, /**< 0x7b2 - dscratch (-/-): Debug scratch register */
+
+  /* counter and timers - low word */
   CSR_MCYCLE         = 0xb00, /**< 0xb00 - mcycle   (r/w): Machine cycle counter low word */
   CSR_MINSTRET       = 0xb02, /**< 0xb02 - minstret (r/w): Machine instructions-retired counter low word */
 
@@ -264,31 +230,100 @@ enum NEORV32_CSR_enum {
   CSR_TIME           = 0xc01, /**< 0xc01 - time    (r/-): Timer low word (from MTIME.TIME_LO) */
   CSR_INSTRET        = 0xc02, /**< 0xc02 - instret (r/-): Instructions-retired counter low word (from MINSTRET) */
 
+  /* not implemented */
+//CSR_HPMCOUNTER3    = 0xc03, /**< 0xc03 - hpmcounter3  (r/-): User hardware performance monitor 3  counter low word */
+//CSR_HPMCOUNTER4    = 0xc04, /**< 0xc04 - hpmcounter4  (r/-): User hardware performance monitor 4  counter low word */
+//CSR_HPMCOUNTER5    = 0xc05, /**< 0xc05 - hpmcounter5  (r/-): User hardware performance monitor 5  counter low word */
+//CSR_HPMCOUNTER6    = 0xc06, /**< 0xc06 - hpmcounter6  (r/-): User hardware performance monitor 6  counter low word */
+//CSR_HPMCOUNTER7    = 0xc07, /**< 0xc07 - hpmcounter7  (r/-): User hardware performance monitor 7  counter low word */
+//CSR_HPMCOUNTER8    = 0xc08, /**< 0xc08 - hpmcounter8  (r/-): User hardware performance monitor 8  counter low word */
+//CSR_HPMCOUNTER9    = 0xc09, /**< 0xc09 - hpmcounter9  (r/-): User hardware performance monitor 9  counter low word */
+//CSR_HPMCOUNTER10   = 0xc0a, /**< 0xc0a - hpmcounter10 (r/-): User hardware performance monitor 10 counter low word */
+//CSR_HPMCOUNTER11   = 0xc0b, /**< 0xc0b - hpmcounter11 (r/-): User hardware performance monitor 11 counter low word */
+//CSR_HPMCOUNTER12   = 0xc0c, /**< 0xc0c - hpmcounter12 (r/-): User hardware performance monitor 12 counter low word */
+//CSR_HPMCOUNTER13   = 0xc0d, /**< 0xc0d - hpmcounter13 (r/-): User hardware performance monitor 13 counter low word */
+//CSR_HPMCOUNTER14   = 0xc0e, /**< 0xc0e - hpmcounter14 (r/-): User hardware performance monitor 14 counter low word */
+//CSR_HPMCOUNTER15   = 0xc0f, /**< 0xc0f - hpmcounter15 (r/-): User hardware performance monitor 15 counter low word */
+//CSR_HPMCOUNTER16   = 0xc10, /**< 0xc10 - hpmcounter16 (r/-): User hardware performance monitor 16 counter low word */
+//CSR_HPMCOUNTER17   = 0xc11, /**< 0xc11 - hpmcounter17 (r/-): User hardware performance monitor 17 counter low word */
+//CSR_HPMCOUNTER18   = 0xc12, /**< 0xc12 - hpmcounter18 (r/-): User hardware performance monitor 18 counter low word */
+//CSR_HPMCOUNTER19   = 0xc13, /**< 0xc13 - hpmcounter19 (r/-): User hardware performance monitor 19 counter low word */
+//CSR_HPMCOUNTER20   = 0xc14, /**< 0xc14 - hpmcounter20 (r/-): User hardware performance monitor 20 counter low word */
+//CSR_HPMCOUNTER21   = 0xc15, /**< 0xc15 - hpmcounter21 (r/-): User hardware performance monitor 21 counter low word */
+//CSR_HPMCOUNTER22   = 0xc16, /**< 0xc16 - hpmcounter22 (r/-): User hardware performance monitor 22 counter low word */
+//CSR_HPMCOUNTER23   = 0xc17, /**< 0xc17 - hpmcounter23 (r/-): User hardware performance monitor 23 counter low word */
+//CSR_HPMCOUNTER24   = 0xc18, /**< 0xc18 - hpmcounter24 (r/-): User hardware performance monitor 24 counter low word */
+//CSR_HPMCOUNTER25   = 0xc19, /**< 0xc19 - hpmcounter25 (r/-): User hardware performance monitor 25 counter low word */
+//CSR_HPMCOUNTER26   = 0xc1a, /**< 0xc1a - hpmcounter26 (r/-): User hardware performance monitor 26 counter low word */
+//CSR_HPMCOUNTER27   = 0xc1b, /**< 0xc1b - hpmcounter27 (r/-): User hardware performance monitor 27 counter low word */
+//CSR_HPMCOUNTER28   = 0xc1c, /**< 0xc1c - hpmcounter28 (r/-): User hardware performance monitor 28 counter low word */
+//CSR_HPMCOUNTER29   = 0xc1d, /**< 0xc1d - hpmcounter29 (r/-): User hardware performance monitor 29 counter low word */
+//CSR_HPMCOUNTER30   = 0xc1e, /**< 0xc1e - hpmcounter30 (r/-): User hardware performance monitor 30 counter low word */
+//CSR_HPMCOUNTER31   = 0xc1f, /**< 0xc1f - hpmcounter31 (r/-): User hardware performance monitor 31 counter low word */
+
+
+  /* counter and timers - high word */
   CSR_CYCLEH         = 0xc80, /**< 0xc80 - cycleh   (r/-): Cycle counter high word (from MCYCLEH) */
   CSR_TIMEH          = 0xc81, /**< 0xc81 - timeh    (r/-): Timer high word (from MTIME.TIME_HI) */
   CSR_INSTRETH       = 0xc82, /**< 0xc82 - instreth (r/-): Instructions-retired counter high word (from MINSTRETH) */
 
+  /* not implemented */
+//CSR_HPMCOUNTER3H   = 0xc83, /**< 0xc83 - hpmcounter3h  (r/-): User hardware performance monitor 3  counter high word */
+//CSR_HPMCOUNTER4H   = 0xc84, /**< 0xc84 - hpmcounter4h  (r/-): User hardware performance monitor 4  counter high word */
+//CSR_HPMCOUNTER5H   = 0xc85, /**< 0xc85 - hpmcounter5h  (r/-): User hardware performance monitor 5  counter high word */
+//CSR_HPMCOUNTER6H   = 0xc86, /**< 0xc86 - hpmcounter6h  (r/-): User hardware performance monitor 6  counter high word */
+//CSR_HPMCOUNTER7H   = 0xc87, /**< 0xc87 - hpmcounter7h  (r/-): User hardware performance monitor 7  counter high word */
+//CSR_HPMCOUNTER8H   = 0xc88, /**< 0xc88 - hpmcounter8h  (r/-): User hardware performance monitor 8  counter high word */
+//CSR_HPMCOUNTER9H   = 0xc89, /**< 0xc89 - hpmcounter9h  (r/-): User hardware performance monitor 9  counter high word */
+//CSR_HPMCOUNTER10H  = 0xc8a, /**< 0xc8a - hpmcounter10h (r/-): User hardware performance monitor 10 counter high word */
+//CSR_HPMCOUNTER11H  = 0xc8b, /**< 0xc8b - hpmcounter11h (r/-): User hardware performance monitor 11 counter high word */
+//CSR_HPMCOUNTER12H  = 0xc8c, /**< 0xc8c - hpmcounter12h (r/-): User hardware performance monitor 12 counter high word */
+//CSR_HPMCOUNTER13H  = 0xc8d, /**< 0xc8d - hpmcounter13h (r/-): User hardware performance monitor 13 counter high word */
+//CSR_HPMCOUNTER14H  = 0xc8e, /**< 0xc8e - hpmcounter14h (r/-): User hardware performance monitor 14 counter high word */
+//CSR_HPMCOUNTER15H  = 0xc8f, /**< 0xc8f - hpmcounter15h (r/-): User hardware performance monitor 15 counter high word */
+//CSR_HPMCOUNTER16H  = 0xc90, /**< 0xc90 - hpmcounter16h (r/-): User hardware performance monitor 16 counter high word */
+//CSR_HPMCOUNTER17H  = 0xc91, /**< 0xc91 - hpmcounter17h (r/-): User hardware performance monitor 17 counter high word */
+//CSR_HPMCOUNTER18H  = 0xc92, /**< 0xc92 - hpmcounter18h (r/-): User hardware performance monitor 18 counter high word */
+//CSR_HPMCOUNTER19H  = 0xc93, /**< 0xc93 - hpmcounter19h (r/-): User hardware performance monitor 19 counter high word */
+//CSR_HPMCOUNTER20H  = 0xc94, /**< 0xc94 - hpmcounter20h (r/-): User hardware performance monitor 20 counter high word */
+//CSR_HPMCOUNTER21H  = 0xc95, /**< 0xc95 - hpmcounter21h (r/-): User hardware performance monitor 21 counter high word */
+//CSR_HPMCOUNTER22H  = 0xc96, /**< 0xc96 - hpmcounter22h (r/-): User hardware performance monitor 22 counter high word */
+//CSR_HPMCOUNTER23H  = 0xc97, /**< 0xc97 - hpmcounter23h (r/-): User hardware performance monitor 23 counter high word */
+//CSR_HPMCOUNTER24H  = 0xc98, /**< 0xc98 - hpmcounter24h (r/-): User hardware performance monitor 24 counter high word */
+//CSR_HPMCOUNTER25H  = 0xc99, /**< 0xc99 - hpmcounter25h (r/-): User hardware performance monitor 25 counter high word */
+//CSR_HPMCOUNTER26H  = 0xc9a, /**< 0xc9a - hpmcounter26h (r/-): User hardware performance monitor 26 counter high word */
+//CSR_HPMCOUNTER27H  = 0xc9b, /**< 0xc9b - hpmcounter27h (r/-): User hardware performance monitor 27 counter high word */
+//CSR_HPMCOUNTER28H  = 0xc9c, /**< 0xc9c - hpmcounter28h (r/-): User hardware performance monitor 28 counter high word */
+//CSR_HPMCOUNTER29H  = 0xc9d, /**< 0xc9d - hpmcounter29h (r/-): User hardware performance monitor 29 counter high word */
+//CSR_HPMCOUNTER30H  = 0xc9e, /**< 0xc9e - hpmcounter30h (r/-): User hardware performance monitor 30 counter high word */
+//CSR_HPMCOUNTER31H  = 0xc9f, /**< 0xc9f - hpmcounter31h (r/-): User hardware performance monitor 31 counter high word */
+
+  /* machine information registers */
   CSR_MVENDORID      = 0xf11, /**< 0xf11 - mvendorid  (r/-): Vendor ID */
   CSR_MARCHID        = 0xf12, /**< 0xf12 - marchid    (r/-): Architecture ID */
   CSR_MIMPID         = 0xf13, /**< 0xf13 - mimpid     (r/-): Implementation ID/version */
   CSR_MHARTID        = 0xf14, /**< 0xf14 - mhartid    (r/-): Hardware thread ID (always 0) */
-  CSR_MCONFIGPTR     = 0xf15  /**< 0xf15 - mconfigptr (r/-): Machine configuration pointer register */
+  CSR_MCONFIGPTR     = 0xf15, /**< 0xf15 - mconfigptr (r/-): Machine configuration pointer register */
+
+  CSR_MXISA          = 0xfc0  /**< 0xfc0 - mxisa (r/-): NEORV32-specific machine "extended CPU ISA and extensions" */
 };
 
 
 /**********************************************************************//**
- * CPU <b>mstatus</b> CSR (r/w): Machine status (RISC-V spec.)
+ * CPU <b>mstatus</b> CSR (r/w): Machine status
  **************************************************************************/
 enum NEORV32_CSR_MSTATUS_enum {
   CSR_MSTATUS_MIE   =  3, /**< CPU mstatus CSR  (3): MIE - Machine interrupt enable bit (r/w) */
   CSR_MSTATUS_MPIE  =  7, /**< CPU mstatus CSR  (7): MPIE - Machine previous interrupt enable bit (r/w) */
   CSR_MSTATUS_MPP_L = 11, /**< CPU mstatus CSR (11): MPP_L - Machine previous privilege mode bit low (r/w) */
-  CSR_MSTATUS_MPP_H = 12  /**< CPU mstatus CSR (12): MPP_H - Machine previous privilege mode bit high (r/w) */
+  CSR_MSTATUS_MPP_H = 12, /**< CPU mstatus CSR (12): MPP_H - Machine previous privilege mode bit high (r/w) */
+  CSR_MSTATUS_MPRV  = 17, /**< CPU mstatus CSR (17): MPRV - Use MPP as effective privilege for M-mode load/stores when set (r/w) */
+  CSR_MSTATUS_TW    = 21  /**< CPU mstatus CSR (21): TW - Disallow execution of wfi instruction in user mode when set (r/w) */
 };
 
 
 /**********************************************************************//**
- * CPU <b>mcounteren</b> CSR (r/w): Machine counter enable (RISC-V spec.)
+ * CPU <b>mcounteren</b> CSR (r/w): Machine counter enable
  **************************************************************************/
 enum NEORV32_CSR_MCOUNTEREN_enum {
   CSR_MCOUNTEREN_CY    = 0, /**< CPU mcounteren CSR (0): CY - Allow access to cycle[h]   CSRs from U-mode when set (r/w) */
@@ -298,7 +333,7 @@ enum NEORV32_CSR_MCOUNTEREN_enum {
 
 
 /**********************************************************************//**
- * CPU <b>mcountinhibit</b> CSR (r/w): Machine counter-inhibit (RISC-V spec.)
+ * CPU <b>mcountinhibit</b> CSR (r/w): Machine counter-inhibit
  **************************************************************************/
 enum NEORV32_CSR_MCOUNTINHIBIT_enum {
   CSR_MCOUNTINHIBIT_CY    = 0,  /**< CPU mcountinhibit CSR (0): CY - Enable auto-increment of [m]cycle[h]   CSR when set (r/w) */
@@ -337,7 +372,7 @@ enum NEORV32_CSR_MCOUNTINHIBIT_enum {
 
 
 /**********************************************************************//**
- * CPU <b>mie</b> CSR (r/w): Machine interrupt enable (RISC-V spec.)
+ * CPU <b>mie</b> CSR (r/w): Machine interrupt enable
  **************************************************************************/
 enum NEORV32_CSR_MIE_enum {
   CSR_MIE_MSIE    =  3, /**< CPU mie CSR  (3): MSIE - Machine software interrupt enable (r/w) */
@@ -364,34 +399,35 @@ enum NEORV32_CSR_MIE_enum {
 
 
 /**********************************************************************//**
- * CPU <b>mip</b> CSR (r/-): Machine interrupt pending (RISC-V spec.)
+ * CPU <b>mip</b> CSR (r/c): Machine interrupt pending
  **************************************************************************/
 enum NEORV32_CSR_MIP_enum {
-  CSR_MIP_MSIP    =  3, /**< CPU mip CSR  (3): MSIP - Machine software interrupt pending (r/-) */
-  CSR_MIP_MTIP    =  7, /**< CPU mip CSR  (7): MTIP - Machine timer interrupt pending (r/-) */
-  CSR_MIP_MEIP    = 11, /**< CPU mip CSR (11): MEIP - Machine external interrupt pending (r/-) */
+  CSR_MIP_MSIP    =  3, /**< CPU mip CSR  (3): MSIP - Machine software interrupt pending (r/c) */
+  CSR_MIP_MTIP    =  7, /**< CPU mip CSR  (7): MTIP - Machine timer interrupt pending (r/c) */
+  CSR_MIP_MEIP    = 11, /**< CPU mip CSR (11): MEIP - Machine external interrupt pending (r/c) */
 
-  CSR_MIP_FIRQ0P  = 16, /**< CPU mip CSR (16): FIRQ0P - Fast interrupt channel 0 pending (r/-) */
-  CSR_MIP_FIRQ1P  = 17, /**< CPU mip CSR (17): FIRQ1P - Fast interrupt channel 1 pending (r/-) */
-  CSR_MIP_FIRQ2P  = 18, /**< CPU mip CSR (18): FIRQ2P - Fast interrupt channel 2 pending (r/-) */
-  CSR_MIP_FIRQ3P  = 19, /**< CPU mip CSR (19): FIRQ3P - Fast interrupt channel 3 pending (r/-) */
-  CSR_MIP_FIRQ4P  = 20, /**< CPU mip CSR (20): FIRQ4P - Fast interrupt channel 4 pending (r/-) */
-  CSR_MIP_FIRQ5P  = 21, /**< CPU mip CSR (21): FIRQ5P - Fast interrupt channel 5 pending (r/-) */
-  CSR_MIP_FIRQ6P  = 22, /**< CPU mip CSR (22): FIRQ6P - Fast interrupt channel 6 pending (r/-) */
-  CSR_MIP_FIRQ7P  = 23, /**< CPU mip CSR (23): FIRQ7P - Fast interrupt channel 7 pending (r/-) */
-  CSR_MIP_FIRQ8P  = 24, /**< CPU mip CSR (24): FIRQ8P - Fast interrupt channel 8 pending (r/-) */
-  CSR_MIP_FIRQ9P  = 25, /**< CPU mip CSR (25): FIRQ9P - Fast interrupt channel 9 pending (r/-) */
-  CSR_MIP_FIRQ10P = 26, /**< CPU mip CSR (26): FIRQ10P - Fast interrupt channel 10 pending (r/-) */
-  CSR_MIP_FIRQ11P = 27, /**< CPU mip CSR (27): FIRQ11P - Fast interrupt channel 11 pending (r/-) */
-  CSR_MIP_FIRQ12P = 28, /**< CPU mip CSR (28): FIRQ12P - Fast interrupt channel 12 pending (r/-) */
-  CSR_MIP_FIRQ13P = 29, /**< CPU mip CSR (29): FIRQ13P - Fast interrupt channel 13 pending (r/-) */
-  CSR_MIP_FIRQ14P = 30, /**< CPU mip CSR (30): FIRQ14P - Fast interrupt channel 14 pending (r/-) */
-  CSR_MIP_FIRQ15P = 31  /**< CPU mip CSR (31): FIRQ15P - Fast interrupt channel 15 pending (r/-) */
+  /* NEORV32-specific extension */
+  CSR_MIP_FIRQ0P  = 16, /**< CPU mip CSR (16): FIRQ0P - Fast interrupt channel 0 pending (r/c) */
+  CSR_MIP_FIRQ1P  = 17, /**< CPU mip CSR (17): FIRQ1P - Fast interrupt channel 1 pending (r/c) */
+  CSR_MIP_FIRQ2P  = 18, /**< CPU mip CSR (18): FIRQ2P - Fast interrupt channel 2 pending (r/c) */
+  CSR_MIP_FIRQ3P  = 19, /**< CPU mip CSR (19): FIRQ3P - Fast interrupt channel 3 pending (r/c) */
+  CSR_MIP_FIRQ4P  = 20, /**< CPU mip CSR (20): FIRQ4P - Fast interrupt channel 4 pending (r/c) */
+  CSR_MIP_FIRQ5P  = 21, /**< CPU mip CSR (21): FIRQ5P - Fast interrupt channel 5 pending (r/c) */
+  CSR_MIP_FIRQ6P  = 22, /**< CPU mip CSR (22): FIRQ6P - Fast interrupt channel 6 pending (r/c) */
+  CSR_MIP_FIRQ7P  = 23, /**< CPU mip CSR (23): FIRQ7P - Fast interrupt channel 7 pending (r/c) */
+  CSR_MIP_FIRQ8P  = 24, /**< CPU mip CSR (24): FIRQ8P - Fast interrupt channel 8 pending (r/c) */
+  CSR_MIP_FIRQ9P  = 25, /**< CPU mip CSR (25): FIRQ9P - Fast interrupt channel 9 pending (r/c) */
+  CSR_MIP_FIRQ10P = 26, /**< CPU mip CSR (26): FIRQ10P - Fast interrupt channel 10 pending (r/c) */
+  CSR_MIP_FIRQ11P = 27, /**< CPU mip CSR (27): FIRQ11P - Fast interrupt channel 11 pending (r/c) */
+  CSR_MIP_FIRQ12P = 28, /**< CPU mip CSR (28): FIRQ12P - Fast interrupt channel 12 pending (r/c) */
+  CSR_MIP_FIRQ13P = 29, /**< CPU mip CSR (29): FIRQ13P - Fast interrupt channel 13 pending (r/c) */
+  CSR_MIP_FIRQ14P = 30, /**< CPU mip CSR (30): FIRQ14P - Fast interrupt channel 14 pending (r/c) */
+  CSR_MIP_FIRQ15P = 31  /**< CPU mip CSR (31): FIRQ15P - Fast interrupt channel 15 pending (r/c) */
 };
 
 
 /**********************************************************************//**
- * CPU <b>misa</b> CSR (r/-): Machine instruction set extensions (RISC-V spec.)
+ * CPU <b>misa</b> CSR (r/-): Machine instruction set extensions
  **************************************************************************/
 enum NEORV32_CSR_MISA_enum {
   CSR_MISA_A      =  0, /**< CPU misa CSR  (0): A: Atomic instructions CPU extension available (r/-)*/
@@ -406,6 +442,32 @@ enum NEORV32_CSR_MISA_enum {
   CSR_MISA_X      = 23, /**< CPU misa CSR (23): X: Non-standard CPU extension available (r/-) */
   CSR_MISA_MXL_LO = 30, /**< CPU misa CSR (30): MXL.lo: CPU data width (r/-) */
   CSR_MISA_MXL_HI = 31  /**< CPU misa CSR (31): MXL.Hi: CPU data width (r/-) */
+};
+
+
+/**********************************************************************//**
+ * CPU <b>mxisa</b> CSR (r/-): Machine _extended_ instruction set extensions (NEORV32-specific)
+ **************************************************************************/
+enum NEORV32_CSR_XISA_enum {
+  // ISA (sub-)extensions
+  CSR_MXISA_ZICSR     =  0, /**< CPU mxisa CSR  (0): privileged architecture (r/-)*/
+  CSR_MXISA_ZIFENCEI  =  1, /**< CPU mxisa CSR  (1): instruction stream sync (r/-)*/
+  CSR_MXISA_ZMMUL     =  2, /**< CPU mxisa CSR  (2): hardware mul/div (r/-)*/
+  CSR_MXISA_ZXCFU     =  3, /**< CPU mxisa CSR  (3): custom RISC-V instructions (r/-)*/
+
+  CSR_MXISA_ZFINX     =  5, /**< CPU mxisa CSR  (5): FPU using x registers, "F-alternative" (r/-)*/
+
+  CSR_MXISA_ZICNTR    =  7, /**< CPU mxisa CSR  (7): standard instruction, cycle and time counter CSRs (r/-)*/
+  CSR_MXISA_PMP       =  8, /**< CPU mxisa CSR  (8): physical memory protection (also "Smpmp") (r/-)*/
+  CSR_MXISA_ZIHPM     =  9, /**< CPU mxisa CSR  (9): hardware performance monitors (r/-)*/
+  CSR_MXISA_DEBUGMODE = 10, /**< CPU mxisa CSR (10): RISC-V debug mode (r/-)*/
+
+  // Misc
+  CSR_MXISA_IS_SIM    = 20, /**< CPU mxisa CSR (20): this might be a simulation when set (r/-)*/
+
+  // Tuning options
+  CSR_MXISA_FASTMUL   = 30, /**< CPU mxisa CSR (30): DSP-based multiplication (M extensions only) (r/-)*/ 
+  CSR_MXISA_FASTSHIFT = 31  /**< CPU mxisa CSR (31): parallel logic for shifts (barrel shifters) (r/-)*/
 };
 
 
@@ -434,56 +496,59 @@ enum NEORV32_HPMCNT_EVENT_enum {
 
 
 /**********************************************************************//**
- * CPU <b>pmpcfg</b> PMP configuration attributed
+ * CPU <b>pmpcfg</b> PMP configuration attributes (CSR entry 0)
  **************************************************************************/
 enum NEORV32_PMPCFG_ATTRIBUTES_enum {
   PMPCFG_R     = 0, /**< CPU pmpcfg attribute (0): Read */
   PMPCFG_W     = 1, /**< CPU pmpcfg attribute (1): Write */
   PMPCFG_X     = 2, /**< CPU pmpcfg attribute (2): Execute */
-  PMPCFG_A_LSB = 3, /**< CPU pmpcfg attribute (3): Mode LSB */
-  PMPCFG_A_MSB = 4, /**< CPU pmpcfg attribute (4): Mode MSB */
+  PMPCFG_A_LSB = 3, /**< CPU pmpcfg attribute (3): Mode LSB #NEORV32_PMP_MODES_enum */
+  PMPCFG_A_MSB = 4, /**< CPU pmpcfg attribute (4): Mode MSB #NEORV32_PMP_MODES_enum */
   PMPCFG_L     = 7  /**< CPU pmpcfg attribute (7): Locked */
 };
 
 /**********************************************************************//**
  * PMP modes
  **************************************************************************/
-#define PMPCFG_MODE_NAPOT 3
+enum NEORV32_PMP_MODES_enum {
+  PMP_OFF = 0, /**< '00': entry disabled */
+  PMP_TOR = 1  /**< '01': TOR mode (top of region) */
+};
 
 
 /**********************************************************************//**
  * Trap codes from mcause CSR.
  **************************************************************************/
 enum NEORV32_EXCEPTION_CODES_enum {
-  TRAP_CODE_I_MISALIGNED = 0x00000000, /**< 0.0:  Instruction address misaligned */
-  TRAP_CODE_I_ACCESS     = 0x00000001, /**< 0.1:  Instruction (bus) access fault */
-  TRAP_CODE_I_ILLEGAL    = 0x00000002, /**< 0.2:  Illegal instruction */
-  TRAP_CODE_BREAKPOINT   = 0x00000003, /**< 0.3:  Breakpoint (EBREAK instruction) */
-  TRAP_CODE_L_MISALIGNED = 0x00000004, /**< 0.4:  Load address misaligned */
-  TRAP_CODE_L_ACCESS     = 0x00000005, /**< 0.5:  Load (bus) access fault */
-  TRAP_CODE_S_MISALIGNED = 0x00000006, /**< 0.6:  Store address misaligned */
-  TRAP_CODE_S_ACCESS     = 0x00000007, /**< 0.7:  Store (bus) access fault */
-  TRAP_CODE_UENV_CALL    = 0x00000008, /**< 0.8:  Environment call from user mode (ECALL instruction) */
-  TRAP_CODE_MENV_CALL    = 0x0000000b, /**< 0.11: Environment call from machine mode (ECALL instruction) */
-  TRAP_CODE_MSI          = 0x80000003, /**< 1.3:  Machine software interrupt */
-  TRAP_CODE_MTI          = 0x80000007, /**< 1.7:  Machine timer interrupt */
-  TRAP_CODE_MEI          = 0x8000000b, /**< 1.11: Machine external interrupt */
-  TRAP_CODE_FIRQ_0       = 0x80000010, /**< 1.16: Fast interrupt channel 0 */
-  TRAP_CODE_FIRQ_1       = 0x80000011, /**< 1.17: Fast interrupt channel 1 */
-  TRAP_CODE_FIRQ_2       = 0x80000012, /**< 1.18: Fast interrupt channel 2 */
-  TRAP_CODE_FIRQ_3       = 0x80000013, /**< 1.19: Fast interrupt channel 3 */
-  TRAP_CODE_FIRQ_4       = 0x80000014, /**< 1.20: Fast interrupt channel 4 */
-  TRAP_CODE_FIRQ_5       = 0x80000015, /**< 1.21: Fast interrupt channel 5 */
-  TRAP_CODE_FIRQ_6       = 0x80000016, /**< 1.22: Fast interrupt channel 6 */
-  TRAP_CODE_FIRQ_7       = 0x80000017, /**< 1.23: Fast interrupt channel 7 */
-  TRAP_CODE_FIRQ_8       = 0x80000018, /**< 1.24: Fast interrupt channel 8 */
-  TRAP_CODE_FIRQ_9       = 0x80000019, /**< 1.25: Fast interrupt channel 9 */
-  TRAP_CODE_FIRQ_10      = 0x8000001a, /**< 1.26: Fast interrupt channel 10 */
-  TRAP_CODE_FIRQ_11      = 0x8000001b, /**< 1.27: Fast interrupt channel 11 */
-  TRAP_CODE_FIRQ_12      = 0x8000001c, /**< 1.28: Fast interrupt channel 12 */
-  TRAP_CODE_FIRQ_13      = 0x8000001d, /**< 1.29: Fast interrupt channel 13 */
-  TRAP_CODE_FIRQ_14      = 0x8000001e, /**< 1.30: Fast interrupt channel 14 */
-  TRAP_CODE_FIRQ_15      = 0x8000001f  /**< 1.31: Fast interrupt channel 15 */
+  TRAP_CODE_I_MISALIGNED = 0x00000000U, /**< 0.0:  Instruction address misaligned */
+  TRAP_CODE_I_ACCESS     = 0x00000001U, /**< 0.1:  Instruction (bus) access fault */
+  TRAP_CODE_I_ILLEGAL    = 0x00000002U, /**< 0.2:  Illegal instruction */
+  TRAP_CODE_BREAKPOINT   = 0x00000003U, /**< 0.3:  Breakpoint (EBREAK instruction) */
+  TRAP_CODE_L_MISALIGNED = 0x00000004U, /**< 0.4:  Load address misaligned */
+  TRAP_CODE_L_ACCESS     = 0x00000005U, /**< 0.5:  Load (bus) access fault */
+  TRAP_CODE_S_MISALIGNED = 0x00000006U, /**< 0.6:  Store address misaligned */
+  TRAP_CODE_S_ACCESS     = 0x00000007U, /**< 0.7:  Store (bus) access fault */
+  TRAP_CODE_UENV_CALL    = 0x00000008U, /**< 0.8:  Environment call from user mode (ECALL instruction) */
+  TRAP_CODE_MENV_CALL    = 0x0000000bU, /**< 0.11: Environment call from machine mode (ECALL instruction) */
+  TRAP_CODE_MSI          = 0x80000003U, /**< 1.3:  Machine software interrupt */
+  TRAP_CODE_MTI          = 0x80000007U, /**< 1.7:  Machine timer interrupt */
+  TRAP_CODE_MEI          = 0x8000000bU, /**< 1.11: Machine external interrupt */
+  TRAP_CODE_FIRQ_0       = 0x80000010U, /**< 1.16: Fast interrupt channel 0 */
+  TRAP_CODE_FIRQ_1       = 0x80000011U, /**< 1.17: Fast interrupt channel 1 */
+  TRAP_CODE_FIRQ_2       = 0x80000012U, /**< 1.18: Fast interrupt channel 2 */
+  TRAP_CODE_FIRQ_3       = 0x80000013U, /**< 1.19: Fast interrupt channel 3 */
+  TRAP_CODE_FIRQ_4       = 0x80000014U, /**< 1.20: Fast interrupt channel 4 */
+  TRAP_CODE_FIRQ_5       = 0x80000015U, /**< 1.21: Fast interrupt channel 5 */
+  TRAP_CODE_FIRQ_6       = 0x80000016U, /**< 1.22: Fast interrupt channel 6 */
+  TRAP_CODE_FIRQ_7       = 0x80000017U, /**< 1.23: Fast interrupt channel 7 */
+  TRAP_CODE_FIRQ_8       = 0x80000018U, /**< 1.24: Fast interrupt channel 8 */
+  TRAP_CODE_FIRQ_9       = 0x80000019U, /**< 1.25: Fast interrupt channel 9 */
+  TRAP_CODE_FIRQ_10      = 0x8000001aU, /**< 1.26: Fast interrupt channel 10 */
+  TRAP_CODE_FIRQ_11      = 0x8000001bU, /**< 1.27: Fast interrupt channel 11 */
+  TRAP_CODE_FIRQ_12      = 0x8000001cU, /**< 1.28: Fast interrupt channel 12 */
+  TRAP_CODE_FIRQ_13      = 0x8000001dU, /**< 1.29: Fast interrupt channel 13 */
+  TRAP_CODE_FIRQ_14      = 0x8000001eU, /**< 1.30: Fast interrupt channel 14 */
+  TRAP_CODE_FIRQ_15      = 0x8000001fU  /**< 1.31: Fast interrupt channel 15 */
 };
 
 
@@ -537,7 +602,7 @@ enum NEORV32_CLOCK_PRSC_enum {
 #define UART0_TX_FIRQ_ENABLE   CSR_MIE_FIRQ3E    /**< MIE CSR bit (#NEORV32_CSR_MIE_enum) */
 #define UART0_TX_FIRQ_PENDING  CSR_MIP_FIRQ3P    /**< MIP CSR bit (#NEORV32_CSR_MIP_enum) */
 #define UART0_TX_RTE_ID        RTE_TRAP_FIRQ_3   /**< RTE entry code (#NEORV32_RTE_TRAP_enum) */
-#define UART0_TX_TRAP_CODE     TRAP_CODE_FIRQ_4  /**< MCAUSE CSR trap code (#NEORV32_EXCEPTION_CODES_enum) */
+#define UART0_TX_TRAP_CODE     TRAP_CODE_FIRQ_3  /**< MCAUSE CSR trap code (#NEORV32_EXCEPTION_CODES_enum) */
 /**@}*/
 /** @name Secondary Universal Asynchronous Receiver/Transmitter (UART1) */
 /**@{*/
@@ -596,6 +661,13 @@ enum NEORV32_CLOCK_PRSC_enum {
 #define GPTMR_RTE_ID           RTE_TRAP_FIRQ_12  /**< RTE entry code (#NEORV32_RTE_TRAP_enum) */
 #define GPTMR_TRAP_CODE        TRAP_CODE_FIRQ_12 /**< MCAUSE CSR trap code (#NEORV32_EXCEPTION_CODES_enum) */
 /**@}*/
+/** @name 1-Wire Interface Controller (ONEWIRE) */
+/**@{*/
+#define ONEWIRE_FIRQ_ENABLE    CSR_MIE_FIRQ13E   /**< MIE CSR bit (#NEORV32_CSR_MIE_enum) */
+#define ONEWIRE_FIRQ_PENDING   CSR_MIP_FIRQ13P   /**< MIP CSR bit (#NEORV32_CSR_MIP_enum) */
+#define ONEWIRE_RTE_ID         RTE_TRAP_FIRQ_13  /**< RTE entry code (#NEORV32_RTE_TRAP_enum) */
+#define ONEWIRE_TRAP_CODE      TRAP_CODE_FIRQ_13 /**< MCAUSE CSR trap code (#NEORV32_EXCEPTION_CODES_enum) */
+/**@}*/
 /**@}*/
 
 
@@ -604,20 +676,20 @@ enum NEORV32_CLOCK_PRSC_enum {
  **************************************************************************/
 /**@{*/
 /** instruction memory base address (r/w/x) */
-// -> configured via ispace_base_c constant in neorv32_package.vhd and available to SW via SYSCONFIG entry
+// -> configured via 'ispace_base_c' constant in neorv32_package.vhd and available to software via SYSINFO entry
 /** data memory base address (r/w/x) */
-// -> configured via dspace_base_c constant in neorv32_package.vhd and available to SW via SYSCONFIG entry
+// -> configured via 'dspace_base_c' constant in neorv32_package.vhd and available to software via SYSINFO entry
 /** bootloader memory base address (r/-/x) */
-#define BOOTLOADER_BASE_ADDRESS (0xFFFF0000UL)
+#define BOOTLOADER_BASE_ADDRESS (0xFFFF0000U)
 /** on-chip debugger complex base address (r/w/x) */
-#define OCD_BASE_ADDRESS        (0XFFFFF800UL)
+#define OCD_BASE_ADDRESS        (0XFFFFF800U)
 /** peripheral/IO devices memory base address (r/w/-) */
-#define IO_BASE_ADDRESS         (0xFFFFFE00UL)
+#define IO_BASE_ADDRESS         (0xFFFFFE00U)
 /**@}*/
 
 
 // ############################################################################################################################
-// On-Chip Debugger (should NOT be used by application software)
+// On-Chip Debugger (should NOT be used by application software at all!)
 // ############################################################################################################################
 /**@{*/
 /** on-chip debugger - debug module prototype */
@@ -631,8 +703,11 @@ typedef struct __attribute__((packed,aligned(4))) {
   const uint32_t reserved3[31]; /**< offset 388..508: reserved */
 } neorv32_dm_t;
 
+/** on-chip debugger debug module base address */
+#define NEORV32_DM_BASE (0XFFFFF800U)
+
 /** on-chip debugger debug module hardware access (#neorv32_dm_t) */
-#define NEORV32_DM (*((volatile neorv32_dm_t*) (0XFFFFF800UL)))
+#define NEORV32_DM (*((volatile neorv32_dm_t*) (NEORV32_DM_BASE)))
 
 /** on-chip debugger debug module control and status register bits */
 enum NEORV32_OCD_DM_SREG_enum {
@@ -680,11 +755,14 @@ enum NEORV32_OCD_DM_SREG_enum {
 /**@{*/
 /** CFS module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t REG[32]; /**< offset 4*0..4*31: CFS register 0..31, user-defined */
+  uint32_t REG[32]; /**< offset 4*0..4*31: CFS register 0..31, user-defined */
 } neorv32_cfs_t;
 
+/** CFS base address */
+#define NEORV32_CFS_BASE (0xFFFFFE00U)
+
 /** CFS module hardware access (#neorv32_cfs_t) */
-#define NEORV32_CFS (*((volatile neorv32_cfs_t*) (0xFFFFFE00UL)))
+#define NEORV32_CFS (*((volatile neorv32_cfs_t*) (NEORV32_CFS_BASE)))
 /**@}*/
 
 
@@ -694,12 +772,15 @@ typedef struct __attribute__((packed,aligned(4))) {
 /**@{*/
 /** PWM module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t CTRL;     /**< offset 0: control register (#NEORV32_PWM_CTRL_enum) */
-	uint32_t DUTY[15]; /**< offset 4..60: duty cycle register 0..14 */
+  uint32_t CTRL;     /**< offset 0: control register (#NEORV32_PWM_CTRL_enum) */
+  uint32_t DUTY[15]; /**< offset 4..60: duty cycle register 0..14 */
 } neorv32_pwm_t;
 
+/** PWM module base address */
+#define NEORV32_PWM_BASE (0xFFFFFE80U)
+
 /** PWM module hardware access (#neorv32_pwm_t) */
-#define NEORV32_PWM (*((volatile neorv32_pwm_t*) (0xFFFFFE80UL)))
+#define NEORV32_PWM (*((volatile neorv32_pwm_t*) (NEORV32_PWM_BASE)))
 
 /** PWM control register bits */
 enum NEORV32_PWM_CTRL_enum {
@@ -717,111 +798,110 @@ enum NEORV32_PWM_CTRL_enum {
 /**@{*/
 /** SLINK module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t       CTRL;         /**< offset 0: control register (#NEORV32_SLINK_CTRL_enum) */
-  const uint32_t reserved0;    /**< offset 4: reserved */
-  uint32_t       IRQ;          /**< offset 8: interrupt configuration register (#NEORV32_SLINK_IRQ_enum) */
-  const uint32_t reserved1;    /**< offset 12: reserved */
-	const uint32_t STATUS;       /**< offset 16: status register (#NEORV32_SLINK_STATUS_enum) */
-  const uint32_t reserved2[3]; /**< offset 20..28: reserved */
-  uint32_t       DATA[8];      /**< offset 32..60: stream link data channel 0..7 */
+  uint32_t       CTRL;        /**< offset 0: control register (#NEORV32_SLINK_CTRL_enum) */
+  uint32_t       IRQ;         /**< offset 4: interrupt configuration register (#NEORV32_SLINK_IRQ_enum) */
+  const uint32_t RX_STATUS;   /**< offset 8: RX links status (#NEORV32_SLINK_RX_STATUS_enum) */
+  uint32_t       TX_STATUS;   /**< offset 12: interrupt configuration register (#NEORV32_SLINK_TX_STATUS_enum) */
+  const uint32_t reserved[4]; /**< offset 16..28: reserved */
+  uint32_t       DATA[8];     /**< offset 32..60: stream link RX/TX data channels 0..7 */
 } neorv32_slink_t;
 
+/** SLINK module base address */
+#define NEORV32_SLINK_BASE (0xFFFFFEC0U)
+
 /** SLINK module hardware access (#neorv32_slink_t) */
-#define NEORV32_SLINK (*((volatile neorv32_slink_t*) (0xFFFFFEC0UL)))
+#define NEORV32_SLINK (*((volatile neorv32_slink_t*) (NEORV32_SLINK_BASE)))
 
 /** SLINK control register bits */
 enum NEORV32_SLINK_CTRL_enum {
-  SLINK_CTRL_RX_NUM0    =  0, /**< SLINK control register(0) (r/-): number of implemented RX links bit 0 */
-  SLINK_CTRL_RX_NUM1    =  1, /**< SLINK control register(1) (r/-): number of implemented RX links bit 1 */
-  SLINK_CTRL_RX_NUM2    =  2, /**< SLINK control register(2) (r/-): number of implemented RX links bit 2 */
-  SLINK_CTRL_RX_NUM3    =  3, /**< SLINK control register(3) (r/-): number of implemented RX links bit 3 */
+  SLINK_CTRL_EN          =  0, /**< SLINK control register(0) (r/w): SLINK controller enable */
 
-  SLINK_CTRL_TX_NUM0    =  4, /**< SLINK control register(4) (r/-): number of implemented TX links bit 0 */
-  SLINK_CTRL_TX_NUM1    =  5, /**< SLINK control register(5) (r/-): number of implemented TX links bit 1 */
-  SLINK_CTRL_TX_NUM2    =  6, /**< SLINK control register(6) (r/-): number of implemented TX links bit 2 */
-  SLINK_CTRL_TX_NUM3    =  7, /**< SLINK control register(7) (r/-): number of implemented TX links bit 3 */
+  SLINK_CTRL_RX_NUM_LSB  = 16, /**< SLINK control register(16) (r/-): number of available RX links bit 0 */
+  SLINK_CTRL_RX_NUM_MSB  = 19, /**< SLINK control register(19) (r/-): number of available RX links bit 3 */
+  SLINK_CTRL_TX_NUM_LSB  = 20, /**< SLINK control register(20) (r/-): number of available TX links bit 0 */
+  SLINK_CTRL_TX_NUM_MSB  = 23, /**< SLINK control register(23) (r/-): number of available TX links bit 3 */
 
-  SLINK_CTRL_RX_FIFO_S0 =  8, /**< SLINK control register( 8) (r/-): log2(RX FIFO size) bit 0 */
-  SLINK_CTRL_RX_FIFO_S1 =  9, /**< SLINK control register( 9) (r/-): log2(RX FIFO size) bit 1 */
-  SLINK_CTRL_RX_FIFO_S2 = 10, /**< SLINK control register(10) (r/-): log2(RX FIFO size) bit 2 */
-  SLINK_CTRL_RX_FIFO_S3 = 11, /**< SLINK control register(11) (r/-): log2(RX FIFO size) bit 3 */
-
-  SLINK_CTRL_TX_FIFO_S0 = 12, /**< SLINK control register(12) (r/-): log2(TX FIFO size) bit 0 */
-  SLINK_CTRL_TX_FIFO_S1 = 13, /**< SLINK control register(13) (r/-): log2(TX FIFO size) bit 1 */
-  SLINK_CTRL_TX_FIFO_S2 = 14, /**< SLINK control register(14) (r/-): log2(TX FIFO size) bit 2 */
-  SLINK_CTRL_TX_FIFO_S3 = 15, /**< SLINK control register(15) (r/-): log2(TX FIFO size) bit 3 */
-
-  SLINK_CTRL_EN         = 31  /**< SLINK control register(0) (r/w): SLINK controller enable */
+  SLINK_CTRL_RX_FIFO_LSB = 24, /**< SLINK control register(24) (r/-): log2(RX FIFO size) bit 0 */
+  SLINK_CTRL_RX_FIFO_MSB = 27, /**< SLINK control register(27) (r/-): log2(RX FIFO size) bit 3 */
+  SLINK_CTRL_TX_FIFO_LSB = 28, /**< SLINK control register(28) (r/-): log2(TX FIFO size) bit 0 */
+  SLINK_CTRL_TX_FIFO_MSB = 31  /**< SLINK control register(31) (r/-): log2(TX FIFO size) bit 3 */
 };
 
-/** SLINK interrupt control register bits */
+/** SLINK interrupt configuration register bits */
 enum NEORV32_SLINK_IRQ_enum {
-  SLINK_IRQ_RX_EN_LSB   =  0, /**< SLINK IRQ configuration register( 0) (r/w): RX IRQ enable LSB (link 0) (#NEORV32_SLINK_IRQ_EN_enum) */
-  SLINK_IRQ_RX_EN_MSB   =  7, /**< SLINK IRQ configuration register( 7) (r/w): RX IRQ enable MSB (link 7) (#NEORV32_SLINK_IRQ_EN_enum) */
-  SLINK_IRQ_RX_MODE_LSB =  8, /**< SLINK IRQ configuration register( 8) (r/w): RX IRQ mode LSB (link 0) (#NEORV32_SLINK_IRQ_RX_TYPE_enum) */
-  SLINK_IRQ_RX_MODE_MSB = 15, /**< SLINK IRQ configuration register(15) (r/w): RX IRQ mode MSB (link 7) (#NEORV32_SLINK_IRQ_RX_TYPE_enum) */
-
-  SLINK_IRQ_TX_EN_LSB   = 16, /**< SLINK IRQ configuration register(16) (r/w): TX IRQ enable LSB (link 0) (#NEORV32_SLINK_IRQ_EN_enum) */
-  SLINK_IRQ_TX_EN_MSB   = 23, /**< SLINK IRQ configuration register(23) (r/w): TX IRQ enable MSB (link 7) (#NEORV32_SLINK_IRQ_EN_enum) */
-  SLINK_IRQ_TX_MODE_LSB = 24, /**< SLINK IRQ configuration register(24) (r/w): TX IRQ mode LSB (link 0) (#NEORV32_SLINK_IRQ_TX_TYPE_enum) */
-  SLINK_IRQ_TX_MODE_MSB = 31  /**< SLINK IRQ configuration register(31) (r/w): TX IRQ mode MSB (link 7) (#NEORV32_SLINK_IRQ_TX_TYPE_enum) */
+  SLINK_IRQ_RX_LSB =  0, /**< SLINK IRQ configuration register(15:00) (r/w): RX link IRQ configuration, LSB */
+  SLINK_IRQ_RX_MSB = 15, /**< SLINK IRQ configuration register(15:00) (r/w): RX link IRQ configuration, MSB */
+  SLINK_IRQ_TX_LSB = 16, /**< SLINK IRQ configuration register(31:16) (r/w): TX link IRQ configuration, LSB */
+  SLINK_IRQ_TX_MSB = 31  /**< SLINK IRQ configuration register(31:16) (r/w): TX link IRQ configuration, MSB */
 };
 
-/** SLINK interrupt configuration enable (per link) */
-enum NEORV32_SLINK_IRQ_EN_enum {
-  SLINK_IRQ_DISABLE = 0, /**< '1': IRQ disabled */
-  SLINK_IRQ_ENABLE  = 1  /**< '0': IRQ enabled */
+/** SLINK RX status register bits */
+enum NEORV32_SLINK_RX_STATUS_enum {
+  SLINK_RX_STATUS_EMPTY_LSB =  0, /**< SLINK RX status register(07:00) (r/-): RX link i FIFO empty, LSB */
+  SLINK_RX_STATUS_EMPTY_MSB =  7, /**< SLINK RX status register(07:00) (r/-): RX link i FIFO empty, MSB */
+  SLINK_RX_STATUS_HALF_LSB  =  8, /**< SLINK RX status register(15:08) (r/-): RX link i FIFO at least half full, LSB */
+  SLINK_RX_STATUS_HALF_MSB  = 15, /**< SLINK RX status register(15:08) (r/-): RX link i FIFO at least half full, MSB */
+  SLINK_RX_STATUS_FULL_LSB  = 16, /**< SLINK RX status register(23:16) (r/-): RX link i FIFO full, LSB */
+  SLINK_RX_STATUS_FULL_MSB  = 23, /**< SLINK RX status register(23:16) (r/-): RX link i FIFO full, MSB */
+  SLINK_RX_STATUS_LAST_LSB  = 24, /**< SLINK RX status register(31:24) (r/-): Set to indicate end of packet for RX link i, LSB */
+  SLINK_RX_STATUS_LAST_MSB  = 31  /**< SLINK RX status register(31:24) (r/-): Set to indicate end of packet for RX link i, MSB */
 };
 
-/** SLINK RX interrupt configuration type (per link) */
-enum NEORV32_SLINK_IRQ_RX_TYPE_enum {
-  SLINK_IRQ_RX_NOT_EMPTY = 0, /**< '1': RX FIFO is not empty */
-  SLINK_IRQ_RX_FIFO_HALF = 1  /**< '0': RX FIFO fill-level rises above half-full */
+/** SLINK TX status register bits */
+enum NEORV32_SLINK_TX_STATUS_enum {
+  SLINK_TX_STATUS_EMPTY_LSB =  0, /**< SLINK TX status register(07:00) (r/-): TX link i FIFO empty, LSB */
+  SLINK_TX_STATUS_EMPTY_MSB =  7, /**< SLINK TX status register(07:00) (r/-): TX link i FIFO empty, MSB */
+  SLINK_TX_STATUS_HALF_LSB  =  8, /**< SLINK TX status register(15:08) (r/-): TX link i FIFO at least half full, LSB */
+  SLINK_TX_STATUS_HALF_MSB  = 15, /**< SLINK TX status register(15:08) (r/-): TX link i FIFO at least half full, MSB */
+  SLINK_TX_STATUS_FULL_LSB  = 16, /**< SLINK TX status register(23:16) (r/-): TX link i FIFO full, LSB */
+  SLINK_TX_STATUS_FULL_MSB  = 23, /**< SLINK TX status register(23:16) (r/-): TX link i FIFO full, MSB */
+  SLINK_TX_STATUS_LAST_LSB  = 24, /**< SLINK TX status register(31:24) (r/w): Set to mark end of packet for TX link i, LSB */
+  SLINK_TX_STATUS_LAST_MSB  = 31  /**< SLINK TX status register(31:24) (r/w): Set to mark end of packet for TX link i, MSB */
 };
+/**@}*/
 
-/** SLINK TX interrupt configuration type (per link) */
-enum NEORV32_SLINK_IRQ_TX_TYPE_enum {
-  SLINK_IRQ_TX_NOT_FULL  = 0, /**< '1': TX FIFO is not FULL */
-  SLINK_IRQ_TX_FIFO_HALF = 1  /**< '0': TX FIFO fill-level falls below half-full */
-};
 
-/** SLINK status register bits */
-enum NEORV32_SLINK_STATUS_enum {
-  SLINK_STATUS_RX0_AVAIL =  0, /**< SLINK status register(0) (r/-): RX link 0 FIFO is NOT empty (data available) */
-  SLINK_STATUS_RX1_AVAIL =  1, /**< SLINK status register(1) (r/-): RX link 1 FIFO is NOT empty (data available) */
-  SLINK_STATUS_RX2_AVAIL =  2, /**< SLINK status register(2) (r/-): RX link 2 FIFO is NOT empty (data available) */
-  SLINK_STATUS_RX3_AVAIL =  3, /**< SLINK status register(3) (r/-): RX link 3 FIFO is NOT empty (data available) */
-  SLINK_STATUS_RX4_AVAIL =  4, /**< SLINK status register(4) (r/-): RX link 4 FIFO is NOT empty (data available) */
-  SLINK_STATUS_RX5_AVAIL =  5, /**< SLINK status register(5) (r/-): RX link 5 FIFO is NOT empty (data available) */
-  SLINK_STATUS_RX6_AVAIL =  6, /**< SLINK status register(6) (r/-): RX link 6 FIFO is NOT empty (data available) */
-  SLINK_STATUS_RX7_AVAIL =  7, /**< SLINK status register(7) (r/-): RX link 7 FIFO is NOT empty (data available) */
+/**********************************************************************//**
+ * @name IO Device: Execute In Place Module (XIP)
+ **************************************************************************/
+/**@{*/
+/** XIP module prototype */
+typedef struct __attribute__((packed,aligned(4))) {
+  uint32_t CTRL;           /**< offset  0: control register (#NEORV32_XIP_CTRL_enum) */
+  const uint32_t reserved; /**< offset  4: reserved */
+  uint32_t DATA_LO;        /**< offset  8: SPI data register low */
+  uint32_t DATA_HI;        /**< offset 12: SPI data register high */
+} neorv32_xip_t;
 
-  SLINK_STATUS_TX0_FREE  =  8, /**< SLINK status register(8)  (r/-): TX link 0 FIFO is NOT full (ready to send) */
-  SLINK_STATUS_TX1_FREE  =  9, /**< SLINK status register(9)  (r/-): TX link 1 FIFO is NOT full (ready to send) */
-  SLINK_STATUS_TX2_FREE  = 10, /**< SLINK status register(10) (r/-): TX link 2 FIFO is NOT full (ready to send) */
-  SLINK_STATUS_TX3_FREE  = 11, /**< SLINK status register(11) (r/-): TX link 3 FIFO is NOT full (ready to send) */
-  SLINK_STATUS_TX4_FREE  = 12, /**< SLINK status register(12) (r/-): TX link 4 FIFO is NOT full (ready to send) */
-  SLINK_STATUS_TX5_FREE  = 13, /**< SLINK status register(13) (r/-): TX link 5 FIFO is NOT full (ready to send) */
-  SLINK_STATUS_TX6_FREE  = 14, /**< SLINK status register(14) (r/-): TX link 6 FIFO is NOT full (ready to send) */
-  SLINK_STATUS_TX7_FREE  = 15, /**< SLINK status register(15) (r/-): TX link 7 FIFO is NOT full (ready to send) */
+/** XIP module base address */
+#define NEORV32_XIP_BASE (0xFFFFFF40U)
 
-  SLINK_STATUS_RX0_HALF  = 16, /**< SLINK status register(16) (r/-): RX link 0 FIFO fill level is >= half-full */
-  SLINK_STATUS_RX1_HALF  = 17, /**< SLINK status register(17) (r/-): RX link 1 FIFO fill level is >= half-full */
-  SLINK_STATUS_RX2_HALF  = 18, /**< SLINK status register(18) (r/-): RX link 2 FIFO fill level is >= half-full */
-  SLINK_STATUS_RX3_HALF  = 19, /**< SLINK status register(19) (r/-): RX link 3 FIFO fill level is >= half-full */
-  SLINK_STATUS_RX4_HALF  = 20, /**< SLINK status register(20) (r/-): RX link 4 FIFO fill level is >= half-full */
-  SLINK_STATUS_RX5_HALF  = 21, /**< SLINK status register(21) (r/-): RX link 5 FIFO fill level is >= half-full */
-  SLINK_STATUS_RX6_HALF  = 22, /**< SLINK status register(22) (r/-): RX link 6 FIFO fill level is >= half-full */
-  SLINK_STATUS_RX7_HALF  = 23, /**< SLINK status register(23) (r/-): RX link 7 FIFO fill level is >= half-full */
+/** XIP module hardware access (#neorv32_xip_t) */
+#define NEORV32_XIP (*((volatile neorv32_xip_t*) (NEORV32_XIP_BASE)))
 
-  SLINK_STATUS_TX0_HALF  = 24, /**< SLINK status register(24) (r/-): TX link 0 FIFO fill level is > half-full */
-  SLINK_STATUS_TX1_HALF  = 25, /**< SLINK status register(25) (r/-): TX link 1 FIFO fill level is > half-full */
-  SLINK_STATUS_TX2_HALF  = 26, /**< SLINK status register(26) (r/-): TX link 2 FIFO fill level is > half-full */
-  SLINK_STATUS_TX3_HALF  = 27, /**< SLINK status register(27) (r/-): TX link 3 FIFO fill level is > half-full */
-  SLINK_STATUS_TX4_HALF  = 28, /**< SLINK status register(28) (r/-): TX link 4 FIFO fill level is > half-full */
-  SLINK_STATUS_TX5_HALF  = 29, /**< SLINK status register(29) (r/-): TX link 5 FIFO fill level is > half-full */
-  SLINK_STATUS_TX6_HALF  = 30, /**< SLINK status register(30) (r/-): TX link 6 FIFO fill level is > half-full */
-  SLINK_STATUS_TX7_HALF  = 31  /**< SLINK status register(31) (r/-): TX link 7 FIFO fill level is > half-full */
+/** XIP control/data register bits */
+enum NEORV32_XIP_CTRL_enum {
+  XIP_CTRL_EN             =  0, /**< XIP control register( 0) (r/w): XIP module enable */
+  XIP_CTRL_PRSC0          =  1, /**< XIP control register( 1) (r/w): Clock prescaler select bit 0 */
+  XIP_CTRL_PRSC1          =  2, /**< XIP control register( 2) (r/w): Clock prescaler select bit 1 */
+  XIP_CTRL_PRSC2          =  3, /**< XIP control register( 3) (r/w): Clock prescaler select bit 2 */
+  XIP_CTRL_CPOL           =  4, /**< XIP control register( 4) (r/w): SPI (idle) clock polarity */
+  XIP_CTRL_CPHA           =  5, /**< XIP control register( 5) (r/w): SPI clock phase */
+  XIP_CTRL_SPI_NBYTES_LSB =  6, /**< XIP control register( 6) (r/w): Number of bytes in SPI transmission, LSB */
+  XIP_CTRL_SPI_NBYTES_MSB =  9, /**< XIP control register( 9) (r/w): Number of bytes in SPI transmission, MSB */
+  XIP_CTRL_XIP_EN         = 10, /**< XIP control register(10) (r/w): XIP access enable */
+  XIP_CTRL_XIP_ABYTES_LSB = 11, /**< XIP control register(11) (r/w): Number XIP address bytes (minus 1), LSB */
+  XIP_CTRL_XIP_ABYTES_MSB = 12, /**< XIP control register(12) (r/w): Number XIP address bytes (minus 1), MSB */
+  XIP_CTRL_RD_CMD_LSB     = 13, /**< XIP control register(13) (r/w): SPI flash read command, LSB */
+  XIP_CTRL_RD_CMD_MSB     = 20, /**< XIP control register(20) (r/w): SPI flash read command, MSB */
+  XIP_CTRL_PAGE_LSB       = 21, /**< XIP control register(21) (r/w): XIP memory page, LSB */
+  XIP_CTRL_PAGE_MSB       = 24, /**< XIP control register(24) (r/w): XIP memory page, MSB */
+  XIP_CTRL_SPI_CSEN       = 25, /**< XIP control register(25) (r/w): SPI chip-select enable */
+  XIP_CTRL_HIGHSPEED      = 26, /**< XIP control register(26) (r/w): SPI high-speed mode enable (ignoring XIP_CTRL_PRSC) */
+  XIP_CTRL_BURST_EN       = 27, /**< XIP control register(27) (r/w): Enable XIP burst mode */
+
+  XIP_CTRL_PHY_BUSY       = 30, /**< XIP control register(20) (r/-): SPI PHY is busy */
+  XIP_CTRL_XIP_BUSY       = 31  /**< XIP control register(31) (r/-): XIP access in progress */
 };
 /**@}*/
 
@@ -832,14 +912,17 @@ enum NEORV32_SLINK_STATUS_enum {
 /**@{*/
 /** GPTMR module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t CTRL;           /**< offset  0: control register (#NEORV32_GPTMR_CTRL_enum) */
-	uint32_t THRES;          /**< offset  4: threshold register */
-	uint32_t COUNT;          /**< offset  8: counter register */
+  uint32_t CTRL;           /**< offset  0: control register (#NEORV32_GPTMR_CTRL_enum) */
+  uint32_t THRES;          /**< offset  4: threshold register */
+  uint32_t COUNT;          /**< offset  8: counter register */
   const uint32_t reserved; /**< offset 12: reserved */
 } neorv32_gptmr_t;
 
+/** GPTMR module base address */
+#define NEORV32_GPTMR_BASE (0xFFFFFF60U)
+
 /** GPTMR module hardware access (#neorv32_gptmr_t) */
-#define NEORV32_GPTMR (*((volatile neorv32_gptmr_t*) (0xFFFFFF60UL)))
+#define NEORV32_GPTMR (*((volatile neorv32_gptmr_t*) (NEORV32_GPTMR_BASE)))
 
 /** GPTMR control/data register bits */
 enum NEORV32_GPTMR_CTRL_enum {
@@ -853,21 +936,71 @@ enum NEORV32_GPTMR_CTRL_enum {
 
 
 /**********************************************************************//**
+ * @name IO Device: 1-Wire Interface Controller (ONEWIRE)
+ **************************************************************************/
+/**@{*/
+/** ONEWIRE module prototype */
+typedef struct __attribute__((packed,aligned(4))) {
+  uint32_t CTRL; /**< offset 0: control register (#NEORV32_ONEWIRE_CTRL_enum) */
+  uint32_t DATA; /**< offset 4: transmission data register (#NEORV32_ONEWIRE_DATA_enum) */
+} neorv32_onewire_t;
+
+/** ONEWIRE module base address */
+#define NEORV32_ONEWIRE_BASE (0xFFFFFF70U)
+
+/** ONEWIRE module hardware access (#neorv32_onewire_t) */
+#define NEORV32_ONEWIRE (*((volatile neorv32_onewire_t*) (NEORV32_ONEWIRE_BASE)))
+
+/** ONEWIRE control register bits */
+enum NEORV32_ONEWIRE_CTRL_enum {
+  ONEWIRE_CTRL_EN        =  0, /**< ONEWIRE control register(0)  (r/w): ONEWIRE controller enable */
+  ONEWIRE_CTRL_PRSC0     =  1, /**< ONEWIRE control register(1)  (r/w): Clock prescaler select bit 0 */
+  ONEWIRE_CTRL_PRSC1     =  2, /**< ONEWIRE control register(2)  (r/w): Clock prescaler select bit 1 */
+  ONEWIRE_CTRL_CLKDIV0   =  3, /**< ONEWIRE control register(3)  (r/w): Clock divider bit 0 */
+  ONEWIRE_CTRL_CLKDIV1   =  4, /**< ONEWIRE control register(4)  (r/w): Clock divider bit 1 */
+  ONEWIRE_CTRL_CLKDIV2   =  5, /**< ONEWIRE control register(5)  (r/w): Clock divider bit 2 */
+  ONEWIRE_CTRL_CLKDIV3   =  6, /**< ONEWIRE control register(6)  (r/w): Clock divider bit 3 */
+  ONEWIRE_CTRL_CLKDIV4   =  7, /**< ONEWIRE control register(7)  (r/w): Clock divider bit 4 */
+  ONEWIRE_CTRL_CLKDIV5   =  8, /**< ONEWIRE control register(8)  (r/w): Clock divider bit 5 */
+  ONEWIRE_CTRL_CLKDIV6   =  9, /**< ONEWIRE control register(9)  (r/w): Clock divider bit 6 */
+  ONEWIRE_CTRL_CLKDIV7   = 10, /**< ONEWIRE control register(10) (r/w): Clock divider bit 7 */
+  ONEWIRE_CTRL_TRIG_RST  = 11, /**< ONEWIRE control register(11) (-/w): Trigger reset pulse, auto-clears */
+  ONEWIRE_CTRL_TRIG_BIT  = 12, /**< ONEWIRE control register(12) (-/w): Trigger single-bit transmission, auto-clears */
+  ONEWIRE_CTRL_TRIG_BYTE = 13, /**< ONEWIRE control register(13) (-/w): Trigger full-byte transmission, auto-clears */
+
+  ONEWIRE_CTRL_SENSE     = 29, /**< ONEWIRE control register(29) (r/-): Current state of the bus line */
+  ONEWIRE_CTRL_PRESENCE  = 30, /**< ONEWIRE control register(30) (r/-): Bus presence detected */
+  ONEWIRE_CTRL_BUSY      = 31, /**< ONEWIRE control register(31) (r/-): Operation in progress when set */
+};
+
+/** ONEWIRE receive/transmit data register bits */
+enum NEORV32_ONEWIRE_DATA_enum {
+  ONEWIRE_DATA_LSB = 0, /**< ONEWIRE data register(0) (r/w): Receive/transmit data (8-bit) LSB */
+  ONEWIRE_DATA_MSB = 7  /**< ONEWIRE data register(7) (r/w): Receive/transmit data (8-bit) MSB */
+};
+/**@}*/
+
+
+/**********************************************************************//**
  * @name IO Device: Bus Monitor (BUSKEEPER)
  **************************************************************************/
 /**@{*/
 /** BUSKEEPER module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t CTRL; /**< offset 0: control register (#NEORV32_BUSKEEPER_CTRL_enum) */
+  uint32_t       CTRL;      /**< offset 0: control register (#NEORV32_BUSKEEPER_CTRL_enum) */
+  const uint32_t reserved ; /**< offset 4: reserved */
 } neorv32_buskeeper_t;
 
+/** BUSKEEPER module base address */
+#define NEORV32_BUSKEEPER_BASE (0xFFFFFF78U)
+
 /** BUSKEEPER module hardware access (#neorv32_buskeeper_t) */
-#define NEORV32_BUSKEEPER (*((volatile neorv32_buskeeper_t*) (0xFFFFFF7CUL)))
+#define NEORV32_BUSKEEPER (*((volatile neorv32_buskeeper_t*) (NEORV32_BUSKEEPER_BASE)))
 
 /** BUSKEEPER control/data register bits */
 enum NEORV32_BUSKEEPER_CTRL_enum {
-  BUSKEEPER_ERR_TYPE =  0, /**< BUSKEEPER control register(0)  (r/-): Bus error type: 0=device error, 1=access timeout */
-  BUSKEEPER_ERR_FLAG = 31  /**< BUSKEEPER control register(31) (r/c): Sticky error flag, clears after read or write access */
+  BUSKEEPER_ERR_TYPE =  0, /**< BUSKEEPER control register( 0) (r/-): Bus error type: 0=device error, 1=access timeout */
+  BUSKEEPER_ERR_FLAG = 31  /**< BUSKEEPER control register(31) (r/-): Sticky error flag, clears after read or write access */
 };
 /**@}*/
 
@@ -878,14 +1011,17 @@ enum NEORV32_BUSKEEPER_CTRL_enum {
 /**@{*/
 /** XIRQ module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t       IER;      /**< offset 0:  IRQ input enable register */
-	uint32_t       IPR;      /**< offset 4:  pending IRQ register /ack/clear */
-	uint32_t       SCR;      /**< offset 8:  interrupt source register */
-	const uint32_t reserved; /**< offset 12: reserved */
+  uint32_t       IER;      /**< offset 0:  IRQ input enable register */
+  uint32_t       IPR;      /**< offset 4:  pending IRQ register /ack/clear */
+  uint32_t       SCR;      /**< offset 8:  interrupt source register */
+  const uint32_t reserved; /**< offset 12: reserved */
 } neorv32_xirq_t;
 
+/** XIRQ module base address */
+#define NEORV32_XIRQ_BASE (0xFFFFFF80U)
+
 /** XIRQ module hardware access (#neorv32_xirq_t) */
-#define NEORV32_XIRQ (*((volatile neorv32_xirq_t*) (0xFFFFFF80UL)))
+#define NEORV32_XIRQ (*((volatile neorv32_xirq_t*) (NEORV32_XIRQ_BASE)))
 /**@}*/
 
 
@@ -895,14 +1031,17 @@ typedef struct __attribute__((packed,aligned(4))) {
 /**@{*/
 /** MTIME module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t TIME_LO;    /**< offset 0:  time register low word */
-	uint32_t TIME_HI;    /**< offset 4:  time register high word */
-	uint32_t TIMECMP_LO; /**< offset 8:  compare register low word */
-	uint32_t TIMECMP_HI; /**< offset 12: compare register high word */
+  uint32_t TIME_LO;    /**< offset 0:  time register low word */
+  uint32_t TIME_HI;    /**< offset 4:  time register high word */
+  uint32_t TIMECMP_LO; /**< offset 8:  compare register low word */
+  uint32_t TIMECMP_HI; /**< offset 12: compare register high word */
 } neorv32_mtime_t;
 
+/** MTIME module base address */
+#define NEORV32_MTIME_BASE (0xFFFFFF90U)
+
 /** MTIME module hardware access (#neorv32_mtime_t) */
-#define NEORV32_MTIME (*((volatile neorv32_mtime_t*) (0xFFFFFF90UL)))
+#define NEORV32_MTIME (*((volatile neorv32_mtime_t*) (NEORV32_MTIME_BASE)))
 /**@}*/
 
 
@@ -912,21 +1051,27 @@ typedef struct __attribute__((packed,aligned(4))) {
 /**@{*/
 /** UART0 module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t CTRL;  /**< offset 0: control register (#NEORV32_UART_CTRL_enum) */
-	uint32_t DATA;  /**< offset 4: data register (#NEORV32_UART_DATA_enum) */
+  uint32_t CTRL;  /**< offset 0: control register (#NEORV32_UART_CTRL_enum) */
+  uint32_t DATA;  /**< offset 4: data register (#NEORV32_UART_DATA_enum) */
 } neorv32_uart0_t;
 
+/** UART0 module base address */
+#define NEORV32_UART0_BASE (0xFFFFFFA0U)
+
 /** UART0 module hardware access (#neorv32_uart0_t) */
-#define NEORV32_UART0 (*((volatile neorv32_uart0_t*) (0xFFFFFFA0UL)))
+#define NEORV32_UART0 (*((volatile neorv32_uart0_t*) (NEORV32_UART0_BASE)))
 
 /** UART1 module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t CTRL;  /**< offset 0: control register (#NEORV32_UART_CTRL_enum) */
-	uint32_t DATA;  /**< offset 4: data register (#NEORV32_UART_DATA_enum) */
+  uint32_t CTRL;  /**< offset 0: control register (#NEORV32_UART_CTRL_enum) */
+  uint32_t DATA;  /**< offset 4: data register (#NEORV32_UART_DATA_enum) */
 } neorv32_uart1_t;
 
+/** UART1 module base address */
+#define NEORV32_UART1_BASE (0xFFFFFFD0U)
+
 /** UART1 module hardware access (#neorv32_uart1_t) */
-#define NEORV32_UART1 (*((volatile neorv32_uart1_t*) (0xFFFFFFD0UL)))
+#define NEORV32_UART1 (*((volatile neorv32_uart1_t*) (NEORV32_UART1_BASE)))
 
 /** UART0/UART1 control register bits */
 enum NEORV32_UART_CTRL_enum {
@@ -998,33 +1143,44 @@ enum NEORV32_UART_DATA_enum {
 /**@{*/
 /** SPI module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t CTRL;  /**< offset 0: control register (#NEORV32_SPI_CTRL_enum) */
-	uint32_t DATA;  /**< offset 4: data register */
+  uint32_t CTRL;  /**< offset 0: control register (#NEORV32_SPI_CTRL_enum) */
+  uint32_t DATA;  /**< offset 4: data register */
 } neorv32_spi_t;
 
+/** SPI module base address */
+#define NEORV32_SPI_BASE (0xFFFFFFA8U)
+
 /** SPI module hardware access (#neorv32_spi_t) */
-#define NEORV32_SPI (*((volatile neorv32_spi_t*) (0xFFFFFFA8UL)))
+#define NEORV32_SPI (*((volatile neorv32_spi_t*) (NEORV32_SPI_BASE)))
 
 /** SPI control register bits */
 enum NEORV32_SPI_CTRL_enum {
-  SPI_CTRL_CS0    =  0, /**< SPI control register(0)  (r/w): Direct chip select line 0 (output is low when set) */
-  SPI_CTRL_CS1    =  1, /**< SPI control register(1)  (r/w): Direct chip select line 1 (output is low when set) */
-  SPI_CTRL_CS2    =  2, /**< SPI control register(2)  (r/w): Direct chip select line 2 (output is low when set) */
-  SPI_CTRL_CS3    =  3, /**< SPI control register(3)  (r/w): Direct chip select line 3 (output is low when set) */
-  SPI_CTRL_CS4    =  4, /**< SPI control register(4)  (r/w): Direct chip select line 4 (output is low when set) */
-  SPI_CTRL_CS5    =  5, /**< SPI control register(5)  (r/w): Direct chip select line 5 (output is low when set) */
-  SPI_CTRL_CS6    =  6, /**< SPI control register(6)  (r/w): Direct chip select line 6 (output is low when set) */
-  SPI_CTRL_CS7    =  7, /**< SPI control register(7)  (r/w): Direct chip select line 7 (output is low when set) */
-  SPI_CTRL_EN     =  8, /**< SPI control register(8)  (r/w): SPI unit enable */
-  SPI_CTRL_CPHA   =  9, /**< SPI control register(9)  (r/w): Clock phase */
-  SPI_CTRL_PRSC0  = 10, /**< SPI control register(10) (r/w): Clock prescaler select bit 0 */
-  SPI_CTRL_PRSC1  = 11, /**< SPI control register(11) (r/w): Clock prescaler select bit 1 */
-  SPI_CTRL_PRSC2  = 12, /**< SPI control register(12) (r/w): Clock prescaler select bit 2 */
-  SPI_CTRL_SIZE0  = 13, /**< SPI control register(13) (r/w): Transfer data size lsb (00: 8-bit, 01: 16-bit, 10: 24-bit, 11: 32-bit) */
-  SPI_CTRL_SIZE1  = 14, /**< SPI control register(14) (r/w): Transfer data size msb (00: 8-bit, 01: 16-bit, 10: 24-bit, 11: 32-bit) */
-  SPI_CTRL_CPOL   = 15, /**< SPI control register(15) (r/w): Clock polarity */
+  SPI_CTRL_EN        =  0, /**< SPI control register(0)  (r/w): SPI unit enable */
+  SPI_CTRL_CPHA      =  1, /**< SPI control register(1)  (r/w): Clock phase */
+  SPI_CTRL_CPOL      =  2, /**< SPI control register(2)  (r/w): Clock polarity */
+  SPI_CTRL_SIZE0     =  3, /**< SPI control register(3)  (r/w): Transfer data size lsb (00: 8-bit, 01: 16-bit, 10: 24-bit, 11: 32-bit) */
+  SPI_CTRL_SIZE1     =  4, /**< SPI control register(4)  (r/w): Transfer data size msb (00: 8-bit, 01: 16-bit, 10: 24-bit, 11: 32-bit) */
+  SPI_CTRL_CS_SEL0   =  5, /**< SPI control register(5)  (r/w): Direct chip select bit 1 */
+  SPI_CTRL_CS_SEL1   =  6, /**< SPI control register(6)  (r/w): Direct chip select bit 2 */
+  SPI_CTRL_CS_SEL2   =  7, /**< SPI control register(7)  (r/w): Direct chip select bit 2 */
+  SPI_CTRL_CS_EN     =  8, /**< SPI control register(8)  (r/w): Chip select enable (selected CS line output is low when set) */
+  SPI_CTRL_PRSC0     =  9, /**< SPI control register(9)  (r/w): Clock prescaler select bit 0 */
+  SPI_CTRL_PRSC1     = 10, /**< SPI control register(10) (r/w): Clock prescaler select bit 1 */
+  SPI_CTRL_PRSC2     = 11, /**< SPI control register(11) (r/w): Clock prescaler select bit 2 */
+  SPI_CTRL_CDIV0     = 12, /**< SPI control register(12) (r/w): Clock divider bit 0 */
+  SPI_CTRL_CDIV1     = 13, /**< SPI control register(13) (r/w): Clock divider bit 1 */
+  SPI_CTRL_CDIV2     = 14, /**< SPI control register(14) (r/w): Clock divider bit 2 */
+  SPI_CTRL_CDIV3     = 15, /**< SPI control register(15) (r/w): Clock divider bit 3 */
+  SPI_CTRL_IRQ0      = 16, /**< SPI control register(16) (r/w): Interrupt configuration lsb (0-: PHY going idle) */
+  SPI_CTRL_IRQ1      = 17, /**< SPI control register(17) (r/w): Interrupt configuration lsb (10: TX fifo less than half full, 11: TX fifo empty) */
 
-  SPI_CTRL_BUSY   = 31  /**< SPI control register(31) (r/-): SPI busy flag */
+  SPI_CTRL_FIFO_LSB  = 23, /**< SPI control register(23) (r/-): log2(FIFO size), lsb */
+  SPI_CTRL_FIFO_MSB  = 26, /**< SPI control register(26) (r/-): log2(FIFO size), msb */
+  SPI_CTRL_RX_AVAIL  = 27, /**< SPI control register(27) (r/-): RX FIFO data available (RX FIFO not empty) */
+  SPI_CTRL_TX_EMPTY  = 28, /**< SPI control register(28) (r/-): TX FIFO empty */
+  SPI_CTRL_TX_HALF   = 29, /**< SPI control register(29) (r/-): TX FIFO at least half full */
+  SPI_CTRL_TX_FULL   = 30, /**< SPI control register(30) (r/-): TX FIFO full */
+  SPI_CTRL_BUSY      = 31  /**< SPI control register(31) (r/-): SPI busy flag */
 };
 /**@}*/
 
@@ -1035,28 +1191,37 @@ enum NEORV32_SPI_CTRL_enum {
 /**@{*/
 /** TWI module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t CTRL;  /**< offset 0: control register (#NEORV32_TWI_CTRL_enum) */
-	uint32_t DATA;  /**< offset 4: data register (#NEORV32_TWI_DATA_enum) */
+  uint32_t CTRL;  /**< offset 0: control register (#NEORV32_TWI_CTRL_enum) */
+  uint32_t DATA;  /**< offset 4: data register (#NEORV32_TWI_DATA_enum) */
 } neorv32_twi_t;
 
+/** TWI module base address */
+#define NEORV32_TWI_BASE (0xFFFFFFB0U)
+
 /** TWI module hardware access (#neorv32_twi_t) */
-#define NEORV32_TWI (*((volatile neorv32_twi_t*) (0xFFFFFFB0UL)))
+#define NEORV32_TWI (*((volatile neorv32_twi_t*) (NEORV32_TWI_BASE)))
 
 /** TWI control register bits */
 enum NEORV32_TWI_CTRL_enum {
-  TWI_CTRL_EN    =  0, /**< TWI control register(0) (r/w): TWI enable */
-  TWI_CTRL_START =  1, /**< TWI control register(1) (-/w): Generate START condition, auto-clears */
-  TWI_CTRL_STOP  =  2, /**< TWI control register(2) (-/w): Generate STOP condition, auto-clears */
-  TWI_CTRL_PRSC0 =  3, /**< TWI control register(3) (r/w): Clock prescaler select bit 0 */
-  TWI_CTRL_PRSC1 =  4, /**< TWI control register(4) (r/w): Clock prescaler select bit 1 */
-  TWI_CTRL_PRSC2 =  5, /**< TWI control register(5) (r/w): Clock prescaler select bit 2 */
-  TWI_CTRL_MACK  =  6, /**< TWI control register(6) (r/w): Generate ACK by controller for each transmission */
+  TWI_CTRL_EN      =  0, /**< TWI control register(0)  (r/w): TWI enable */
+  TWI_CTRL_START   =  1, /**< TWI control register(1)  (-/w): Generate START condition, auto-clears */
+  TWI_CTRL_STOP    =  2, /**< TWI control register(2)  (-/w): Generate STOP condition, auto-clears */
+  TWI_CTRL_MACK    =  3, /**< TWI control register(3)  (r/w): Generate ACK by controller for each transmission */
+  TWI_CTRL_CSEN    =  4, /**< TWI control register(4)  (r/w): Allow clock stretching when set */
+  TWI_CTRL_PRSC0   =  5, /**< TWI control register(5)  (r/w): Clock prescaler select bit 0 */
+  TWI_CTRL_PRSC1   =  6, /**< TWI control register(6)  (r/w): Clock prescaler select bit 1 */
+  TWI_CTRL_PRSC2   =  7, /**< TWI control register(7)  (r/w): Clock prescaler select bit 2 */
+  TWI_CTRL_CDIV0   =  8, /**< TWI control register(8)  (r/w): Clock divider bit 0 */
+  TWI_CTRL_CDIV1   =  9, /**< TWI control register(9)  (r/w): Clock divider bit 1 */
+  TWI_CTRL_CDIV2   = 10, /**< TWI control register(10) (r/w): Clock divider bit 2 */
+  TWI_CTRL_CDIV3   = 11, /**< TWI control register(11) (r/w): Clock divider bit 3 */
 
-  TWI_CTRL_ACK   = 30, /**< TWI control register(30) (r/-): ACK received when set */
-  TWI_CTRL_BUSY  = 31  /**< TWI control register(31) (r/-): Transfer in progress, busy flag */
+  TWI_CTRL_CLAIMED = 29, /**< TWI control register(29) (r/-): Set if the TWI bus is currently claimed by any controller */
+  TWI_CTRL_ACK     = 30, /**< TWI control register(30) (r/-): ACK received when set */
+  TWI_CTRL_BUSY    = 31  /**< TWI control register(31) (r/-): Transfer in progress, busy flag */
 };
 
-/** WTD receive/transmit data register bits */
+/** TWI receive/transmit data register bits */
 enum NEORV32_TWI_DATA_enum {
   TWI_DATA_LSB = 0, /**< TWI data register(0) (r/w): Receive/transmit data (8-bit) LSB */
   TWI_DATA_MSB = 7  /**< TWI data register(7) (r/w): Receive/transmit data (8-bit) MSB */
@@ -1070,17 +1235,22 @@ enum NEORV32_TWI_DATA_enum {
 /**@{*/
 /** TRNG module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t CTRL;  /**< offset 0: control register (#NEORV32_TRNG_CTRL_enum) */
+  uint32_t CTRL;  /**< offset 0: control register (#NEORV32_TRNG_CTRL_enum) */
 } neorv32_trng_t;
 
+/** TRNG module base address */
+#define NEORV32_TRNG_BASE (0xFFFFFFB8U)
+
 /** TRNG module hardware access (#neorv32_trng_t) */
-#define NEORV32_TRNG (*((volatile neorv32_trng_t*) (0xFFFFFFB8UL)))
+#define NEORV32_TRNG (*((volatile neorv32_trng_t*) (NEORV32_TRNG_BASE)))
 
 /** TRNG control/data register bits */
 enum NEORV32_TRNG_CTRL_enum {
   TRNG_CTRL_DATA_LSB =  0, /**< TRNG data/control register(0)  (r/-): Random data byte LSB */
   TRNG_CTRL_DATA_MSB =  7, /**< TRNG data/control register(7)  (r/-): Random data byte MSB */
 
+  TRNG_CTRL_FIFO_CLR = 28, /**< TRNG data/control register(28) (-/w): Clear data FIFO (auto clears) */
+  TRNG_CTRL_SIM_MODE = 29, /**< TRNG data/control register(29) (r/-): PRNG mode (simulation mode) */
   TRNG_CTRL_EN       = 30, /**< TRNG data/control register(30) (r/w): TRNG enable */
   TRNG_CTRL_VALID    = 31  /**< TRNG data/control register(31) (r/-): Random data output valid */
 };
@@ -1093,13 +1263,19 @@ enum NEORV32_TRNG_CTRL_enum {
 /**@{*/
 /** WDT module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t CTRL;  /**< offset 0: control register (#NEORV32_WDT_CTRL_enum) */
+  uint32_t CTRL;  /**< offset 0: control register (#NEORV32_WDT_CTRL_enum) */
 } neorv32_wdt_t;
 
-/** WDT module hardware access (#neorv32_wdt_t) */
-#define NEORV32_WDT (*((volatile neorv32_wdt_t*) (0xFFFFFFBCUL)))
+/** WDT module base address */
+#define NEORV32_WDT_BASE (0xFFFFFFBCU)
 
-/** WTD control register bits */
+/** WDT module hardware access (#neorv32_wdt_t) */
+#define NEORV32_WDT (*((volatile neorv32_wdt_t*) (NEORV32_WDT_BASE)))
+
+/** WDT access password */
+#define NEORV32_WDT_PWD (0xCA36)
+
+/** WDT control register bits */
 enum NEORV32_WDT_CTRL_enum {
   WDT_CTRL_EN       =  0, /**< WDT control register(0) (r/w): Watchdog enable */
   WDT_CTRL_CLK_SEL0 =  1, /**< WDT control register(1) (r/w): Clock prescaler select bit 0 */
@@ -1111,7 +1287,11 @@ enum NEORV32_WDT_CTRL_enum {
   WDT_CTRL_FORCE    =  7, /**< WDT control register(7) (-/w): Force WDT action, auto-clears */
   WDT_CTRL_LOCK     =  8, /**< WDT control register(8) (r/w): Lock write access to control register, clears on reset (HW or WDT) only */
   WDT_CTRL_DBEN     =  9, /**< WDT control register(9) (r/w): Allow WDT to continue operation even when in debug mode */
-  WDT_CTRL_HALF     = 10  /**< WDT control register(10) (r/-): Set if at least half of the max. timeout counter value has been reached */
+  WDT_CTRL_HALF     = 10, /**< WDT control register(10) (r/-): Set if at least half of the max. timeout counter value has been reached */
+  WDT_CTRL_PAUSE    = 11, /**< WDT control register(11) (r/w): Pause WDT when CPU is in sleep mode */
+
+  WDT_CTRL_PWD_LSB  = 16, /**< WDT control register(16) (-/w): Watchdog access password, LSB ("NEORV32_WDT_PWD") */
+  WDT_CTRL_PWD_MSB  = 31  /**< WDT control register(31) (-/w): Watchdog access password, MSB ("NEORV32_WDT_PWD") */
 };
 /**@}*/
 
@@ -1122,14 +1302,17 @@ enum NEORV32_WDT_CTRL_enum {
 /**@{*/
 /** GPIO module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	const uint32_t INPUT_LO;  /**< offset 0:  parallel input port lower 32-bit */
-	const uint32_t INPUT_HI;  /**< offset 4:  parallel input port upper 32-bit */
-	uint32_t       OUTPUT_LO; /**< offset 8:  parallel output port lower 32-bit */
-	uint32_t       OUTPUT_HI; /**< offset 12: parallel output port upper 32-bit */
+  const uint32_t INPUT_LO;  /**< offset 0:  parallel input port lower 32-bit, read-only */
+  const uint32_t INPUT_HI;  /**< offset 4:  parallel input port upper 32-bit, read-only */
+  uint32_t       OUTPUT_LO; /**< offset 8:  parallel output port lower 32-bit */
+  uint32_t       OUTPUT_HI; /**< offset 12: parallel output port upper 32-bit */
 } neorv32_gpio_t;
 
+/** GPIO module base address */
+#define NEORV32_GPIO_BASE (0xFFFFFFC0U)
+
 /** GPIO module hardware access (#neorv32_gpio_t) */
-#define NEORV32_GPIO (*((volatile neorv32_gpio_t*) (0xFFFFFFC0UL)))
+#define NEORV32_GPIO (*((volatile neorv32_gpio_t*) (NEORV32_GPIO_BASE)))
 /**@}*/
 
 
@@ -1139,12 +1322,15 @@ typedef struct __attribute__((packed,aligned(4))) {
 /**@{*/
 /** NEOLED module prototype */
 typedef struct __attribute__((packed,aligned(4))) {
-	uint32_t CTRL; /**< offset 0: control register */
-	uint32_t DATA; /**< offset 4: data register (#NEORV32_NEOLED_CTRL_enum) */
+  uint32_t CTRL; /**< offset 0: control register */
+  uint32_t DATA; /**< offset 4: data register (#NEORV32_NEOLED_CTRL_enum) */
 } neorv32_neoled_t;
 
+/** NEOLED module base address */
+#define NEORV32_NEOLED_BASE (0xFFFFFFD8U)
+
 /** NEOLED module hardware access (#neorv32_neoled_t) */
-#define NEORV32_NEOLED (*((volatile neorv32_neoled_t*) (0xFFFFFFD8UL)))
+#define NEORV32_NEOLED (*((volatile neorv32_neoled_t*) (NEORV32_NEOLED_BASE)))
 
 /** NEOLED control register bits */
 enum NEORV32_NEOLED_CTRL_enum {
@@ -1191,37 +1377,23 @@ enum NEORV32_NEOLED_CTRL_enum {
  * @name IO Device: System Configuration Information Memory (SYSINFO)
  **************************************************************************/
 /**@{*/
-/** SYSINFO module prototype */
+/** SYSINFO module prototype - whole module is read-only */
 typedef struct __attribute__((packed,aligned(4))) {
-	const uint32_t CLK;         /**< offset 0:  clock speed in Hz */
-	const uint32_t CPU;         /**< offset 4:  CPU core features (#NEORV32_SYSINFO_CPU_enum) */
-	const uint32_t SOC;         /**< offset 8:  SoC features (#NEORV32_SYSINFO_SOC_enum) */
-	const uint32_t CACHE;       /**< offset 12: cache configuration (#NEORV32_SYSINFO_CACHE_enum) */
-	const uint32_t ISPACE_BASE; /**< offset 16: instruction memory address space base */
-	const uint32_t DSPACE_BASE; /**< offset 20: data memory address space base */
-	const uint32_t IMEM_SIZE;   /**< offset 24: internal instruction memory (IMEM) size in bytes */
-	const uint32_t DMEM_SIZE;   /**< offset 28: internal data memory (DMEM) size in bytes */
+  const uint32_t CLK;         /**< offset 0:  clock speed in Hz */
+  const uint32_t CUSTOM_ID;   /**< offset 4:  custom user-defined ID (via top generic) */
+  const uint32_t SOC;         /**< offset 8:  SoC features (#NEORV32_SYSINFO_SOC_enum) */
+  const uint32_t CACHE;       /**< offset 12: cache configuration (#NEORV32_SYSINFO_CACHE_enum) */
+  const uint32_t ISPACE_BASE; /**< offset 16: instruction memory address space base */
+  const uint32_t DSPACE_BASE; /**< offset 20: data memory address space base */
+  const uint32_t IMEM_SIZE;   /**< offset 24: internal instruction memory (IMEM) size in bytes */
+  const uint32_t DMEM_SIZE;   /**< offset 28: internal data memory (DMEM) size in bytes */
 } neorv32_sysinfo_t;
 
+/** SYSINFO module base address */
+#define NEORV32_SYSINFO_BASE (0xFFFFFFE0U)
+
 /** SYSINFO module hardware access (#neorv32_sysinfo_t) */
-#define NEORV32_SYSINFO (*((volatile neorv32_sysinfo_t*) (0xFFFFFFE0UL)))
-
-/** NEORV32_SYSINFO.CPU (r/-): Implemented CPU sub-extensions/features */
-enum NEORV32_SYSINFO_CPU_enum {
-  SYSINFO_CPU_ZICSR     =  0, /**< SYSINFO_CPU (0): Zicsr extension (I sub-extension) available when set (r/-) */
-  SYSINFO_CPU_ZIFENCEI  =  1, /**< SYSINFO_CPU (1): Zifencei extension (I sub-extension) available when set (r/-) */
-  SYSINFO_CPU_ZMMUL     =  2, /**< SYSINFO_CPU (2): Zmmul extension (M sub-extension) available when set (r/-) */
-
-  SYSINFO_CPU_ZFINX     =  5, /**< SYSINFO_CPU (5): Zfinx extension (F sub-/alternative-extension) available when set (r/-) */
-  SYSINFO_CPU_ZXSCNT    =  6, /**< SYSINFO_CPU (6): Custom extension - Small CPU counters: "cycle" & "instret" CSRs have less than 64-bit when set (r/-) */
-  SYSINFO_CPU_ZICNTR    =  7, /**< SYSINFO_CPU (7): Basic CPU counters available when set (r/-) */
-  SYSINFO_CPU_PMP       =  8, /**< SYSINFO_CPU (8): PMP (physical memory protection) extension available when set (r/-) */
-  SYSINFO_CPU_ZIHPM     =  9, /**< SYSINFO_CPU (9): HPM (hardware performance monitors) extension available when set (r/-) */
-  SYSINFO_CPU_DEBUGMODE = 10, /**< SYSINFO_CPU (10): RISC-V CPU debug mode available when set (r/-) */
-
-  SYSINFO_CPU_FASTMUL   = 30, /**< SYSINFO_CPU (30): fast multiplications (via FAST_MUL_EN generic) available when set (r/-) */
-  SYSINFO_CPU_FASTSHIFT = 31  /**< SYSINFO_CPU (31): fast shifts (via FAST_SHIFT_EN generic) available when set (r/-) */
-};
+#define NEORV32_SYSINFO (*((volatile neorv32_sysinfo_t*) (NEORV32_SYSINFO_BASE)))
 
 /** NEORV32_SYSINFO.SOC (r/-): Implemented processor devices/features */
 enum NEORV32_SYSINFO_SOC_enum {
@@ -1234,7 +1406,6 @@ enum NEORV32_SYSINFO_SOC_enum {
 
   SYSINFO_SOC_IS_SIM         = 13, /**< SYSINFO_FEATURES (13) (r/-): Set during simulation (not guaranteed) */
   SYSINFO_SOC_OCD            = 14, /**< SYSINFO_FEATURES (14) (r/-): On-chip debugger implemented when 1 (via ON_CHIP_DEBUGGER_EN generic) */
-  SYSINFO_SOC_HW_RESET       = 15, /**< SYSINFO_FEATURES (15) (r/-): Dedicated hardware reset of core registers implemented when 1 (via package's dedicated_reset_c constant) */
 
   SYSINFO_SOC_IO_GPIO        = 16, /**< SYSINFO_FEATURES (16) (r/-): General purpose input/output port unit implemented when 1 (via IO_GPIO_EN generic) */
   SYSINFO_SOC_IO_MTIME       = 17, /**< SYSINFO_FEATURES (17) (r/-): Machine system timer implemented when 1 (via IO_MTIME_EN generic) */
@@ -1249,7 +1420,9 @@ enum NEORV32_SYSINFO_SOC_enum {
   SYSINFO_SOC_IO_UART1       = 26, /**< SYSINFO_FEATURES (26) (r/-): Secondary universal asynchronous receiver/transmitter 1 implemented when 1 (via IO_UART1_EN generic) */
   SYSINFO_SOC_IO_NEOLED      = 27, /**< SYSINFO_FEATURES (27) (r/-): NeoPixel-compatible smart LED interface implemented when 1 (via IO_NEOLED_EN generic) */
   SYSINFO_SOC_IO_XIRQ        = 28, /**< SYSINFO_FEATURES (28) (r/-): External interrupt controller implemented when 1 (via XIRQ_NUM_IO generic) */
-  SYSINFO_SOC_IO_GPTMR       = 29  /**< SYSINFO_FEATURES (29) (r/-): General purpose timer implemented when 1 (via IO_GPTMR_EN generic) */
+  SYSINFO_SOC_IO_GPTMR       = 29, /**< SYSINFO_FEATURES (29) (r/-): General purpose timer implemented when 1 (via IO_GPTMR_EN generic) */
+  SYSINFO_SOC_IO_XIP         = 30, /**< SYSINFO_FEATURES (30) (r/-): Execute in place module implemented when 1 (via IO_XIP_EN generic) */
+  SYSINFO_SOC_IO_ONEWIRE     = 30  /**< SYSINFO_FEATURES (31) (r/-): 1-wire interface controller implemented when 1 (via IO_ONEWIRE_EN generic) */
 };
 
 /** NEORV32_SYSINFO.CACHE (r/-): Cache configuration */
@@ -1278,13 +1451,14 @@ enum NEORV32_SYSINFO_SOC_enum {
 
 
 // ----------------------------------------------------------------------------
-// Include all IO driver headers
+// Include all system header files
 // ----------------------------------------------------------------------------
-// cpu core
-#include "neorv32_cpu.h"
-
 // intrinsics
 #include "neorv32_intrinsics.h"
+
+// cpu core
+#include "neorv32_cpu.h"
+#include "neorv32_cpu_cfu.h"
 
 // neorv32 runtime environment
 #include "neorv32_rte.h"
@@ -1295,6 +1469,7 @@ enum NEORV32_SYSINFO_SOC_enum {
 #include "neorv32_gptmr.h"
 #include "neorv32_mtime.h"
 #include "neorv32_neoled.h"
+#include "neorv32_onewire.h"
 #include "neorv32_pwm.h"
 #include "neorv32_slink.h"
 #include "neorv32_spi.h"
@@ -1302,6 +1477,7 @@ enum NEORV32_SYSINFO_SOC_enum {
 #include "neorv32_twi.h"
 #include "neorv32_uart.h"
 #include "neorv32_wdt.h"
+#include "neorv32_xip.h"
 #include "neorv32_xirq.h"
 
 #ifdef __cplusplus

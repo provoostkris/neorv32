@@ -3,7 +3,7 @@
 // # ********************************************************************************************* #
 // # BSD 3-Clause License                                                                          #
 // #                                                                                               #
-// # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+// # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 // #                                                                                               #
 // # Redistribution and use in source and binary forms, with or without modification, are          #
 // # permitted provided that the following conditions are met:                                     #
@@ -35,7 +35,6 @@
 
 /**********************************************************************//**
  * @file neorv32_spi.c
- * @author Stephan Nolting
  * @brief Serial peripheral interface controller (SPI) HW driver source file.
  *
  * @note These functions should only be used if the SPI unit was synthesized (IO_SPI_EN = true).
@@ -65,30 +64,44 @@ int neorv32_spi_available(void) {
  * Enable and configure SPI controller. The SPI control register bits are listed in #NEORV32_SPI_CTRL_enum.
  *
  * @param[in] prsc Clock prescaler select (0..7).  See #NEORV32_CLOCK_PRSC_enum.
+ * @prama[in] cdiv Clock divider (0..15).
  * @param[in] clk_phase Clock phase (0=sample on rising edge, 1=sample on falling edge).
  * @param[in] clk_polarity Clock polarity (when idle).
  * @param[in] data_size Data transfer size (0: 8-bit, 1: 16-bit, 2: 24-bit, 3: 32-bit).
+ * @param[in] irq_config Interrupt configuration (0,1: PHY transfer done, 2: TX FIFO becomes less than half full, 3: TX FIFO becomes empty).
  **************************************************************************/
-void neorv32_spi_setup(uint8_t prsc, uint8_t clk_phase, uint8_t clk_polarity, uint8_t data_size) {
+void neorv32_spi_setup(int prsc, int cdiv, int clk_phase, int clk_polarity, int data_size, int irq_config) {
 
   NEORV32_SPI.CTRL = 0; // reset
 
-  uint32_t ct_enable = 1;
-  ct_enable = ct_enable << SPI_CTRL_EN;
+  uint32_t tmp = 0;
+  tmp |= (uint32_t)(1            & 0x01) << SPI_CTRL_EN;
+  tmp |= (uint32_t)(clk_phase    & 0x01) << SPI_CTRL_CPHA;
+  tmp |= (uint32_t)(clk_polarity & 0x01) << SPI_CTRL_CPOL;
+  tmp |= (uint32_t)(data_size    & 0x03) << SPI_CTRL_SIZE0;
+  tmp |= (uint32_t)(prsc         & 0x07) << SPI_CTRL_PRSC0;
+  tmp |= (uint32_t)(cdiv         & 0x0f) << SPI_CTRL_CDIV0;
+  tmp |= (uint32_t)(irq_config   & 0x03) << SPI_CTRL_IRQ0;
 
-  uint32_t ct_prsc = (uint32_t)(prsc & 0x07);
-  ct_prsc = ct_prsc << SPI_CTRL_PRSC0;
+  NEORV32_SPI.CTRL = tmp;
+}
 
-  uint32_t ct_phase = (uint32_t)(clk_phase & 0x01);
-  ct_phase = ct_phase << SPI_CTRL_CPHA;
 
-  uint32_t ct_polarity = (uint32_t)(clk_polarity & 0x01);
-  ct_polarity = ct_polarity << SPI_CTRL_CPOL;
+/**********************************************************************//**
+ * Get configured clock speed in Hz.
+ *
+ * @return Actual configured SPI clock speed in Hz.
+ **************************************************************************/
+uint32_t neorv32_spi_get_clock_speed(void) {
 
-  uint32_t ct_size = (uint32_t)(data_size & 0x03);
-  ct_size = ct_size << SPI_CTRL_SIZE0;
+  const uint32_t PRSC_LUT[8] = {2, 4, 8, 64, 128, 1024, 2048, 4096};
 
-  NEORV32_SPI.CTRL = ct_enable | ct_prsc | ct_phase | ct_polarity | ct_size;
+  uint32_t ctrl = NEORV32_SPI.CTRL;
+  uint32_t prsc_sel = (ctrl >> SPI_CTRL_PRSC0) & 0x7;
+  uint32_t clock_div = (ctrl >> SPI_CTRL_CDIV0) & 0xf;
+
+  uint32_t tmp = 2 * PRSC_LUT[prsc_sel] * clock_div;
+  return NEORV32_SYSINFO.CLK / tmp;
 }
 
 
@@ -111,32 +124,40 @@ void neorv32_spi_enable(void) {
 
 
 /**********************************************************************//**
- * Activate SPI chip select signal.
+ * Get SPI FIFO depth.
  *
- * @note The chip select output lines are LOW when activated.
- *
- * @param cs Chip select line to activate (0..7).
+ * @return FIFO depth (number of entries), zero if no FIFO implemented
  **************************************************************************/
-void neorv32_spi_cs_en(uint8_t cs) {
+int neorv32_spi_get_fifo_depth(void) {
 
-  uint32_t cs_mask = (uint32_t)(1 << (cs & 0x07));
-  cs_mask = cs_mask << SPI_CTRL_CS0;
-  NEORV32_SPI.CTRL |= cs_mask;
+  uint32_t tmp = (NEORV32_SPI.CTRL >> SPI_CTRL_FIFO_LSB) & 0x0f;
+  return (int)(1 << tmp);
 }
 
 
 /**********************************************************************//**
- * Deactivate SPI chip select signal.
+ * Activate single SPI chip select signal.
  *
- * @note The chip select output lines are HIGH when deactivated.
+ * @note The SPI chip select output lines are LOW when activated.
  *
- * @param cs Chip select line to deactivate (0..7).
+ * @param cs Chip select line to activate (0..7).
  **************************************************************************/
-void neorv32_spi_cs_dis(uint8_t cs) {
+void neorv32_spi_cs_en(int cs) {
 
-  uint32_t cs_mask = (uint32_t)(1 << (cs & 0x07));
-  cs_mask = cs_mask << SPI_CTRL_CS0;
-  NEORV32_SPI.CTRL &= ~cs_mask;
+  uint32_t tmp = NEORV32_SPI.CTRL;
+  tmp &= ~(0xf << SPI_CTRL_CS_SEL0); // clear old configuration
+  tmp |= (1 << SPI_CTRL_CS_EN) | ((cs & 7) << SPI_CTRL_CS_SEL0); // set new configuration
+  NEORV32_SPI.CTRL = tmp;
+}
+
+
+/**********************************************************************//**
+ * Deactivate currently active SPI chip select signal.
+ *
+ * @note The SPI chip select output lines are HIGH when deactivated.
+ **************************************************************************/
+void neorv32_spi_cs_dis(void) {
+  NEORV32_SPI.CTRL &= ~(1 << SPI_CTRL_CS_EN);
 }
 
 

@@ -7,7 +7,7 @@
 -- # ********************************************************************************************* #
 -- # BSD 3-Clause License                                                                          #
 -- #                                                                                               #
--- # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+-- # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 -- #                                                                                               #
 -- # Redistribution and use in source and binary forms, with or without modification, are          #
 -- # permitted provided that the following conditions are met:                                     #
@@ -84,7 +84,7 @@ architecture neorv32_tb_rtl of neorv32_tb is
   -- simulated external Wishbone memory C (can be used to simulate external IO access) --
   constant ext_mem_c_base_addr_c   : std_ulogic_vector(31 downto 0) := x"F0000000"; -- wishbone memory base address (default begin of EXTERNAL IO area)
   constant ext_mem_c_size_c        : natural := 64; -- wishbone memory size in bytes
-  constant ext_mem_c_latency_c     : natural := 3; -- latency in clock cycles (min 1, max 255), plus 1 cycle initial delay
+  constant ext_mem_c_latency_c     : natural := 128; -- latency in clock cycles (min 1, max 255), plus 1 cycle initial delay
   -- simulation interrupt trigger --
   constant irq_trigger_base_addr_c : std_ulogic_vector(31 downto 0) := x"FF000000";
   -- -------------------------------------------------------------------------------------------
@@ -111,6 +111,9 @@ architecture neorv32_tb_rtl of neorv32_tb is
   -- twi --
   signal twi_scl, twi_sda : std_logic;
 
+  -- 1-wire --
+  signal one_wire : std_logic;
+
   -- spi --
   signal spi_data : std_ulogic;
 
@@ -129,15 +132,11 @@ architecture neorv32_tb_rtl of neorv32_tb is
     ack   : std_ulogic; -- transfer acknowledge
     err   : std_ulogic; -- transfer error
     tag   : std_ulogic_vector(02 downto 0); -- request tag
-    lock  : std_ulogic; -- exclusive access request
   end record;
   signal wb_cpu, wb_mem_a, wb_mem_b, wb_mem_c, wb_irq : wishbone_t;
 
   -- Wishbone access latency type --
   type ext_mem_read_latency_t is array (0 to 255) of std_ulogic_vector(31 downto 0);
-
-  -- exclusive access / reservation --
-  signal ext_mem_c_atomic_reservation : std_ulogic := '0';
 
   -- simulated external memory c (IO) --
   signal ext_ram_c : mem32_t(0 to ext_mem_c_size_c/4-1); -- uninitialized, used to simulate external IO
@@ -146,7 +145,7 @@ architecture neorv32_tb_rtl of neorv32_tb is
   type ext_mem_t is record
     rdata  : ext_mem_read_latency_t;
     acc_en : std_ulogic;
-    ack    : std_ulogic_vector(ext_mem_a_latency_c-1 downto 0);
+    ack    : std_ulogic_vector(255 downto 0);
   end record;
   signal ext_mem_a, ext_mem_b, ext_mem_c : ext_mem_t;
 
@@ -154,6 +153,7 @@ architecture neorv32_tb_rtl of neorv32_tb is
   signal slink_dat : sdata_8x32_t;
   signal slink_val : std_ulogic_vector(7 downto 0);
   signal slink_rdy : std_ulogic_vector(7 downto 0);
+  signal slink_lst : std_ulogic_vector(7 downto 0);
 
   signal slink_transmitter_dat, slink_receiver_dat : sdata_8x32_t;
   signal slink_transmitter_val, slink_receiver_val : std_ulogic_vector(7 downto 0);
@@ -219,7 +219,7 @@ begin
     if ci_mode then
       -- No need to send the full expectation in one big chunk
       check_uart(net, uart1_rx_handle, nul & nul);
-      check_uart(net, uart1_rx_handle, "0/46" & cr & lf);
+      check_uart(net, uart1_rx_handle, "0/49" & cr & lf);
     end if;
 
     -- Apply some random data on each SLINK inputs and expect it to
@@ -279,28 +279,30 @@ begin
     -- General --
     CLOCK_FREQUENCY              => f_clock_c,     -- clock frequency of clk_i in Hz
     HW_THREAD_ID                 => 0,             -- hardware thread id (hartid) (32-bit)
+    CUSTOM_ID                    => x"12345678",  -- custom user-defined ID
     INT_BOOTLOADER_EN            => false,         -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
     -- On-Chip Debugger (OCD) --
     ON_CHIP_DEBUGGER_EN          => true,          -- implement on-chip debugger
     -- RISC-V CPU Extensions --
-    CPU_EXTENSION_RISCV_A        => true,          -- implement atomic extension?
     CPU_EXTENSION_RISCV_B        => true,          -- implement bit-manipulation extension?
     CPU_EXTENSION_RISCV_C        => true,          -- implement compressed extension?
     CPU_EXTENSION_RISCV_E        => false,         -- implement embedded RF extension?
-    CPU_EXTENSION_RISCV_M        => true,          -- implement muld/div extension?
+    CPU_EXTENSION_RISCV_M        => true,          -- implement mul/div extension?
     CPU_EXTENSION_RISCV_U        => true,          -- implement user mode extension?
     CPU_EXTENSION_RISCV_Zfinx    => true,          -- implement 32-bit floating-point extension (using INT reg!)
     CPU_EXTENSION_RISCV_Zicsr    => true,          -- implement CSR system?
     CPU_EXTENSION_RISCV_Zicntr   => true,          -- implement base counters?
     CPU_EXTENSION_RISCV_Zihpm    => true,          -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei => true,          -- implement instruction stream sync.?
+    CPU_EXTENSION_RISCV_Zmmul    => false,         -- implement multiply-only M sub-extension?
+    CPU_EXTENSION_RISCV_Zxcfu    => true,          -- implement custom (instr.) functions unit?
     -- Extension Options --
     FAST_MUL_EN                  => false,         -- use DSPs for M extension's multiplier
     FAST_SHIFT_EN                => false,         -- use barrel shifter for shift operations
-    CPU_CNT_WIDTH                => 64,            -- total width of CPU cycle and instret counters (0..64)
+    CPU_IPB_ENTRIES              => 1,             -- entries is instruction prefetch buffer, has to be a power of 2, min 1
     -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              => 8,             -- number of regions (0..64)
-    PMP_MIN_GRANULARITY          => 64*1024,       -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+    PMP_NUM_REGIONS              => 5,             -- number of regions (0..16)
+    PMP_MIN_GRANULARITY          => 4,             -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
     -- Hardware Performance Monitors (HPM) --
     HPM_NUM_CNTS                 => 12,            -- number of implemented HPM counters (0..29)
     HPM_CNT_WIDTH                => 40,            -- total size of HPM counters (0..64)
@@ -318,6 +320,10 @@ begin
     -- External memory interface --
     MEM_EXT_EN                   => true,          -- implement external memory bus interface?
     MEM_EXT_TIMEOUT              => 256,           -- cycles after a pending bus access auto-terminates (0 = disabled)
+    MEM_EXT_PIPE_MODE            => false,         -- protocol: false=classic/standard wishbone mode, true=pipelined wishbone mode
+    MEM_EXT_BIG_ENDIAN           => false,         -- byte order: true=big-endian, false=little-endian
+    MEM_EXT_ASYNC_RX             => false,         -- use register buffer for RX data when false
+    MEM_EXT_ASYNC_TX             => false,         -- use register buffer for TX data when false
     -- Stream link interface --
     SLINK_NUM_TX                 => 8,             -- number of TX links (0..8)
     SLINK_NUM_RX                 => 8,             -- number of TX links (0..8)
@@ -337,17 +343,21 @@ begin
     IO_UART1_RX_FIFO             => 1,             -- RX fifo depth, has to be a power of two, min 1
     IO_UART1_TX_FIFO             => 1,             -- TX fifo depth, has to be a power of two, min 1
     IO_SPI_EN                    => true,          -- implement serial peripheral interface (SPI)?
+    IO_SPI_FIFO                  => 4,             -- SPI RTX fifo depth, has to be zero or a power of two
     IO_TWI_EN                    => true,          -- implement two-wire interface (TWI)?
     IO_PWM_NUM_CH                => 30,            -- number of PWM channels to implement (0..60); 0 = disabled
     IO_WDT_EN                    => true,          -- implement watch dog timer (WDT)?
-    IO_TRNG_EN                   => false,         -- trng cannot be simulated
+    IO_TRNG_EN                   => true,          -- implement true random number generator (TRNG)?
+    IO_TRNG_FIFO                 => 4,             -- TRNG fifo depth, has to be a power of two, min 1
     IO_CFS_EN                    => true,          -- implement custom functions subsystem (CFS)?
     IO_CFS_CONFIG                => (others => '0'), -- custom CFS configuration generic
     IO_CFS_IN_SIZE               => 32,            -- size of CFS input conduit in bits
     IO_CFS_OUT_SIZE              => 32,            -- size of CFS output conduit in bits
     IO_NEOLED_EN                 => true,          -- implement NeoPixel-compatible smart LED interface (NEOLED)?
     IO_NEOLED_TX_FIFO            => 8,             -- NEOLED TX FIFO depth, 1..32k, has to be a power of two
-    IO_GPTMR_EN                  => true           -- implement general purpose timer (GPTMR)?
+    IO_GPTMR_EN                  => true,          -- implement general purpose timer (GPTMR)?
+    IO_XIP_EN                    => true,          -- implement execute in place module (XIP)?
+    IO_ONEWIRE_EN                => true           -- implement 1-wire interface (ONEWIRE)?
   )
   port map (
     -- Global control --
@@ -368,20 +378,26 @@ begin
     wb_sel_o       => wb_cpu.sel,      -- byte enable
     wb_stb_o       => wb_cpu.stb,      -- strobe
     wb_cyc_o       => wb_cpu.cyc,      -- valid cycle
-    wb_lock_o      => wb_cpu.lock,     -- exclusive access request
     wb_ack_i       => wb_cpu.ack,      -- transfer acknowledge
     wb_err_i       => wb_cpu.err,      -- transfer error
     -- Advanced memory control signals (available if MEM_EXT_EN = true) --
     fence_o        => open,            -- indicates an executed FENCE operation
     fencei_o       => open,            -- indicates an executed FENCEI operation
+    -- XIP (execute in place via SPI) signals (available if IO_XIP_EN = true) --
+    xip_csn_o      => open,            -- chip-select, low-active
+    xip_clk_o      => open,            -- serial clock
+    xip_sdi_i      => '1',             -- device data input
+    xip_sdo_o      => open,            -- controller data output
     -- TX stream interfaces (available if SLINK_NUM_TX > 0) --
     slink_tx_dat_o => slink_dat,       -- output data
     slink_tx_val_o => slink_val,       -- valid output
     slink_tx_rdy_i => slink_rdy,       -- ready to send
+    slink_tx_lst_o => slink_lst,       -- last data of package
     -- RX stream interfaces (available if SLINK_NUM_RX > 0) --
     slink_rx_dat_i => slink_dat,       -- input data
     slink_rx_val_i => slink_val,       -- valid input
     slink_rx_rdy_o => slink_rdy,       -- ready to receive
+    slink_rx_lst_i => slink_lst,       -- last data of package
     -- GPIO (available if IO_GPIO_EN = true) --
     gpio_o         => gpio,            -- parallel output
     gpio_i         => gpio,            -- parallel input
@@ -403,6 +419,8 @@ begin
     -- TWI (available if IO_TWI_EN = true) --
     twi_sda_io     => twi_sda,         -- twi serial data line
     twi_scl_io     => twi_scl,         -- twi serial clock line
+    -- 1-Wire Interface (available if IO_ONEWIRE_EN = true) --
+    onewire_io     => one_wire,        -- 1-wire bus
     -- PWM (available if IO_PWM_NUM_CH > 0) --
     pwm_o          => open,            -- pwm channels
     -- Custom Functions Subsystem IO --
@@ -424,6 +442,9 @@ begin
   -- TWI termination (pull-ups) --
   twi_scl <= 'H';
   twi_sda <= 'H';
+
+  -- 1-Wire termination (pull-up) --
+  one_wire <= 'H';
 
   uart0_checker: entity work.uart_rx
     generic map (uart0_rx_handle)
@@ -482,7 +503,6 @@ begin
   wb_mem_a.sel   <= wb_cpu.sel;
   wb_mem_a.tag   <= wb_cpu.tag;
   wb_mem_a.cyc   <= wb_cpu.cyc;
-  wb_mem_a.lock  <= wb_cpu.lock;
 
   wb_mem_b.addr  <= wb_cpu.addr;
   wb_mem_b.wdata <= wb_cpu.wdata;
@@ -490,7 +510,6 @@ begin
   wb_mem_b.sel   <= wb_cpu.sel;
   wb_mem_b.tag   <= wb_cpu.tag;
   wb_mem_b.cyc   <= wb_cpu.cyc;
-  wb_mem_b.lock  <= wb_cpu.lock;
 
   wb_mem_c.addr  <= wb_cpu.addr;
   wb_mem_c.wdata <= wb_cpu.wdata;
@@ -498,7 +517,6 @@ begin
   wb_mem_c.sel   <= wb_cpu.sel;
   wb_mem_c.tag   <= wb_cpu.tag;
   wb_mem_c.cyc   <= wb_cpu.cyc;
-  wb_mem_c.lock  <= wb_cpu.lock;
 
   wb_irq.addr    <= wb_cpu.addr;
   wb_irq.wdata   <= wb_cpu.wdata;
@@ -551,7 +569,7 @@ begin
 
         -- bus output register --
         wb_mem_a.err <= '0';
-        if (ext_mem_a.ack(ext_mem_a_latency_c-1) = '1') and (wb_mem_a.cyc = '1') and (wb_mem_a.ack = '0') then
+        if (ext_mem_a.ack(ext_mem_a_latency_c-1) = '1') and (wb_mem_a.cyc = '1') then
           wb_mem_a.rdata <= ext_mem_a.rdata(ext_mem_a_latency_c-1);
           wb_mem_a.ack   <= '1';
         else
@@ -600,7 +618,7 @@ begin
 
       -- bus output register --
       wb_mem_b.err <= '0';
-      if (ext_mem_b.ack(ext_mem_b_latency_c-1) = '1') and (wb_mem_b.cyc = '1') and (wb_mem_b.ack = '0') then
+      if (ext_mem_b.ack(ext_mem_b_latency_c-1) = '1') and (wb_mem_b.cyc = '1') then
         wb_mem_b.rdata <= ext_mem_b.rdata(ext_mem_b_latency_c-1);
         wb_mem_b.ack   <= '1';
       else
@@ -638,20 +656,11 @@ begin
         end loop;
       end if;
 
-      -- EXCLUSIVE bus access -----------------------------------------------------
-      -- -----------------------------------------------------------------------------
-      -- Since there is only one CPU in this design, the exclusive access reservation in THIS memory CANNOT fail.
-      -- However, this memory module is used to simulated failing LR/SC accesses.
-      if ((wb_mem_c.cyc and wb_mem_c.stb) = '1') then -- valid access
-        ext_mem_c_atomic_reservation <= wb_mem_c.lock; -- make reservation
-      end if;
-      -- -----------------------------------------------------------------------------
-
       -- bus output register --
-      if (ext_mem_c.ack(ext_mem_c_latency_c-1) = '1') and (wb_mem_c.cyc = '1') and (wb_mem_c.ack = '0') then
+      if (ext_mem_c.ack(ext_mem_c_latency_c-1) = '1') and (wb_mem_c.cyc = '1') then
         wb_mem_c.rdata <= ext_mem_c.rdata(ext_mem_c_latency_c-1);
         wb_mem_c.ack   <= '1';
-        wb_mem_c.err   <= ext_mem_c_atomic_reservation; -- issue a bus error if there is an exclusive access request
+        wb_mem_c.err   <= '0';
       else
         wb_mem_c.rdata <= (others => '0');
         wb_mem_c.ack   <= '0';

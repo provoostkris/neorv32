@@ -6,7 +6,7 @@
 -- # ********************************************************************************************* #
 -- # BSD 3-Clause License                                                                          #
 -- #                                                                                               #
--- # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+-- # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 -- #                                                                                               #
 -- # Redistribution and use in source and binary forms, with or without modification, are          #
 -- # permitted provided that the following conditions are met:                                     #
@@ -47,13 +47,13 @@ entity neorv32_top_avalonmm is
     -- General --
     CLOCK_FREQUENCY              : natural;           -- clock frequency of clk_i in Hz
     HW_THREAD_ID                 : natural := 0;      -- hardware thread id (32-bit)
+    CUSTOM_ID                    : std_ulogic_vector(31 downto 0) := x"00000000"; -- custom user-defined ID
     INT_BOOTLOADER_EN            : boolean := false;  -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
 
     -- On-Chip Debugger (OCD) --
     ON_CHIP_DEBUGGER_EN          : boolean := false;  -- implement on-chip debugger
 
     -- RISC-V CPU Extensions --
-    CPU_EXTENSION_RISCV_A        : boolean := false;  -- implement atomic extension?
     CPU_EXTENSION_RISCV_B        : boolean := false;  -- implement bit-manipulation extension?
     CPU_EXTENSION_RISCV_C        : boolean := false;  -- implement compressed extension?
     CPU_EXTENSION_RISCV_E        : boolean := false;  -- implement embedded RF extension?
@@ -65,16 +65,16 @@ entity neorv32_top_avalonmm is
     CPU_EXTENSION_RISCV_Zihpm    : boolean := false;  -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei : boolean := false;  -- implement instruction stream sync.?
     CPU_EXTENSION_RISCV_Zmmul    : boolean := false;  -- implement multiply-only M sub-extension?
+    CPU_EXTENSION_RISCV_Zxcfu    : boolean := false;  -- implement custom (instr.) functions unit?
 
     -- Extension Options --
     FAST_MUL_EN                  : boolean := false;  -- use DSPs for M extension's multiplier
     FAST_SHIFT_EN                : boolean := false;  -- use barrel shifter for shift operations
-    CPU_CNT_WIDTH                : natural := 64;     -- total width of CPU cycle and instret counters (0..64)
-    CPU_IPB_ENTRIES              : natural := 2;      -- entries is instruction prefetch buffer, has to be a power of 2
+    CPU_IPB_ENTRIES              : natural := 1;      -- entries is instruction prefetch buffer, has to be a power of 1, min 1
 
     -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              : natural := 0;      -- number of regions (0..64)
-    PMP_MIN_GRANULARITY          : natural := 64*1024; -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+    PMP_NUM_REGIONS              : natural := 0;      -- number of regions (0..16)
+    PMP_MIN_GRANULARITY          : natural := 4;      -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
 
     -- Hardware Performance Monitors (HPM) --
     HPM_NUM_CNTS                 : natural := 0;      -- number of implemented HPM counters (0..29)
@@ -115,17 +115,21 @@ entity neorv32_top_avalonmm is
     IO_UART1_RX_FIFO             : natural := 1;      -- RX fifo depth, has to be a power of two, min 1
     IO_UART1_TX_FIFO             : natural := 1;      -- TX fifo depth, has to be a power of two, min 1
     IO_SPI_EN                    : boolean := false;  -- implement serial peripheral interface (SPI)?
+    IO_SPI_FIFO                  : natural := 0;      -- SPI RTX fifo depth, has to be zero or a power of two
     IO_TWI_EN                    : boolean := false;  -- implement two-wire interface (TWI)?
     IO_PWM_NUM_CH                : natural := 0;      -- number of PWM channels to implement (0..60); 0 = disabled
     IO_WDT_EN                    : boolean := false;  -- implement watch dog timer (WDT)?
     IO_TRNG_EN                   : boolean := false;  -- implement true random number generator (TRNG)?
+    IO_TRNG_FIFO                 : natural := 1;      -- TRNG fifo depth, has to be a power of two, min 1
     IO_CFS_EN                    : boolean := false;  -- implement custom functions subsystem (CFS)?
     IO_CFS_CONFIG                : std_ulogic_vector(31 downto 0) := x"00000000"; -- custom CFS configuration generic
     IO_CFS_IN_SIZE               : positive := 32;    -- size of CFS input conduit in bits
     IO_CFS_OUT_SIZE              : positive := 32;    -- size of CFS output conduit in bits
     IO_NEOLED_EN                 : boolean := false;  -- implement NeoPixel-compatible smart LED interface (NEOLED)?
     IO_NEOLED_TX_FIFO            : natural := 1;      -- NEOLED TX FIFO depth, 1..32k, has to be a power of two
-    IO_GPTMR_EN                  : boolean := false   -- implement general purpose timer (GPTMR)?
+    IO_GPTMR_EN                  : boolean := false;  -- implement general purpose timer (GPTMR)?
+    IO_XIP_EN                    : boolean := false;  -- implement execute in place module (XIP)?
+    IO_ONEWIRE_EN                : boolean := false   -- implement 1-wire interface (ONEWIRE)?
   );
   port (
     -- Global control --
@@ -142,25 +146,33 @@ entity neorv32_top_avalonmm is
     -- AvalonMM interface
     read_o         : out std_logic;
     write_o        : out std_logic;
-    waitrequest_i  : in std_logic := '0';
+    waitrequest_i  : in  std_logic := '0';
     byteenable_o   : out std_logic_vector(3 downto 0);
     address_o      : out std_logic_vector(31 downto 0);
     writedata_o    : out std_logic_vector(31 downto 0);
-    readdata_i     : in std_logic_vector(31 downto 0) := (others => '0');
+    readdata_i     : in  std_logic_vector(31 downto 0) := (others => '0');
 
     -- Advanced memory control signals (available if MEM_EXT_EN = true) --
     fence_o        : out std_ulogic; -- indicates an executed FENCE operation
     fencei_o       : out std_ulogic; -- indicates an executed FENCEI operation
 
+    -- XIP (execute in place via SPI) signals (available if IO_XIP_EN = true) --
+    xip_csn_o      : out std_ulogic; -- chip-select, low-active
+    xip_clk_o      : out std_ulogic; -- serial clock
+    xip_sdi_i      : in  std_ulogic := 'L'; -- device data input
+    xip_sdo_o      : out std_ulogic; -- controller data output
+
     -- TX stream interfaces (available if SLINK_NUM_TX > 0) --
     slink_tx_dat_o : out sdata_8x32_t; -- output data
     slink_tx_val_o : out std_ulogic_vector(7 downto 0); -- valid output
     slink_tx_rdy_i : in  std_ulogic_vector(7 downto 0) := (others => 'L'); -- ready to send
+    slink_tx_lst_o : out std_ulogic_vector(7 downto 0); -- last data of package
 
     -- RX stream interfaces (available if SLINK_NUM_RX > 0) --
     slink_rx_dat_i : in  sdata_8x32_t := (others => (others => 'U')); -- input data
     slink_rx_val_i : in  std_ulogic_vector(7 downto 0) := (others => 'L'); -- valid input
     slink_rx_rdy_o : out std_ulogic_vector(7 downto 0); -- ready to receive
+    slink_rx_lst_i : in  std_ulogic_vector(7 downto 0) := (others => 'L'); -- last data of package
 
     -- GPIO (available if IO_GPIO_EN = true) --
     gpio_o         : out std_ulogic_vector(63 downto 0); -- parallel output
@@ -187,6 +199,9 @@ entity neorv32_top_avalonmm is
     -- TWI (available if IO_TWI_EN = true) --
     twi_sda_io     : inout std_logic := 'U'; -- twi serial data line
     twi_scl_io     : inout std_logic := 'U'; -- twi serial clock line
+
+    -- 1-Wire Interface (available if IO_ONEWIRE_EN = true) --
+    onewire_io     : inout std_logic; -- 1-wire bus
 
     -- PWM (available if IO_PWM_NUM_CH > 0) --
     pwm_o          : out std_ulogic_vector(59 downto 0); -- pwm channels
@@ -215,17 +230,16 @@ end neorv32_top_avalonmm;
 architecture neorv32_top_avalonmm_rtl of neorv32_top_avalonmm is
 
   -- Wishbone bus interface (available if MEM_EXT_EN = true) --
-  signal wb_tag_o  : std_ulogic_vector(02 downto 0); -- request tag
-  signal wb_adr_o  : std_ulogic_vector(31 downto 0); -- address
-  signal wb_dat_i  : std_ulogic_vector(31 downto 0) := (others => 'U'); -- read data
-  signal wb_dat_o  : std_ulogic_vector(31 downto 0); -- write data
-  signal wb_we_o   : std_ulogic; -- read/write
-  signal wb_sel_o  : std_ulogic_vector(03 downto 0); -- byte enable
-  signal wb_stb_o  : std_ulogic; -- strobe
-  signal wb_cyc_o  : std_ulogic; -- valid cycle
-  signal wb_lock_o : std_ulogic; -- exclusive access request
-  signal wb_ack_i  : std_ulogic := 'L'; -- transfer acknowledge
-  signal wb_err_i  : std_ulogic := 'L'; -- transfer error
+  signal wb_tag_o : std_ulogic_vector(02 downto 0); -- request tag
+  signal wb_adr_o : std_ulogic_vector(31 downto 0); -- address
+  signal wb_dat_i : std_ulogic_vector(31 downto 0) := (others => 'U'); -- read data
+  signal wb_dat_o : std_ulogic_vector(31 downto 0); -- write data
+  signal wb_we_o  : std_ulogic; -- read/write
+  signal wb_sel_o : std_ulogic_vector(03 downto 0); -- byte enable
+  signal wb_stb_o : std_ulogic; -- strobe
+  signal wb_cyc_o : std_ulogic; -- valid cycle
+  signal wb_ack_i : std_ulogic := 'L'; -- transfer acknowledge
+  signal wb_err_i : std_ulogic := 'L'; -- transfer error
 
 begin
 
@@ -234,13 +248,13 @@ begin
     -- General --
     CLOCK_FREQUENCY => CLOCK_FREQUENCY,
     HW_THREAD_ID => HW_THREAD_ID,
+    CUSTOM_ID => CUSTOM_ID,
     INT_BOOTLOADER_EN => INT_BOOTLOADER_EN,
 
     -- On-Chip Debugger (OCD) --
     ON_CHIP_DEBUGGER_EN => ON_CHIP_DEBUGGER_EN,
 
     -- RISC-V CPU Extensions --
-    CPU_EXTENSION_RISCV_A => CPU_EXTENSION_RISCV_A,
     CPU_EXTENSION_RISCV_B => CPU_EXTENSION_RISCV_B,
     CPU_EXTENSION_RISCV_C => CPU_EXTENSION_RISCV_C,
     CPU_EXTENSION_RISCV_E => CPU_EXTENSION_RISCV_E,
@@ -252,11 +266,11 @@ begin
     CPU_EXTENSION_RISCV_Zihpm => CPU_EXTENSION_RISCV_Zihpm,
     CPU_EXTENSION_RISCV_Zifencei => CPU_EXTENSION_RISCV_Zifencei,
     CPU_EXTENSION_RISCV_Zmmul => CPU_EXTENSION_RISCV_Zmmul,
+    CPU_EXTENSION_RISCV_Zxcfu => CPU_EXTENSION_RISCV_Zxcfu,
 
     -- Extension Options --
     FAST_MUL_EN => FAST_MUL_EN,
     FAST_SHIFT_EN => FAST_SHIFT_EN,
-    CPU_CNT_WIDTH => CPU_CNT_WIDTH,
     CPU_IPB_ENTRIES => CPU_IPB_ENTRIES,
 
     -- Physical Memory Protection (PMP) --
@@ -287,6 +301,7 @@ begin
     MEM_EXT_PIPE_MODE => false,
     MEM_EXT_BIG_ENDIAN => false,
     MEM_EXT_ASYNC_RX => false,
+    MEM_EXT_ASYNC_TX => false,
 
     -- Stream link interface (SLINK) --
     SLINK_NUM_TX => SLINK_NUM_TX,
@@ -309,17 +324,21 @@ begin
     IO_UART1_RX_FIFO => IO_UART1_RX_FIFO,
     IO_UART1_TX_FIFO => IO_UART1_TX_FIFO,
     IO_SPI_EN => IO_SPI_EN,
+    IO_SPI_FIFO => IO_SPI_FIFO,
     IO_TWI_EN => IO_TWI_EN,
     IO_PWM_NUM_CH => IO_PWM_NUM_CH,
     IO_WDT_EN => IO_WDT_EN,
     IO_TRNG_EN => IO_TRNG_EN,
+    IO_TRNG_FIFO => IO_TRNG_FIFO,
     IO_CFS_EN => IO_CFS_EN,
     IO_CFS_CONFIG => IO_CFS_CONFIG,
     IO_CFS_IN_SIZE => IO_CFS_IN_SIZE,
     IO_CFS_OUT_SIZE => IO_CFS_OUT_SIZE,
     IO_NEOLED_EN => IO_NEOLED_EN,
     IO_NEOLED_TX_FIFO => IO_NEOLED_TX_FIFO,
-    IO_GPTMR_EN => IO_GPTMR_EN
+    IO_GPTMR_EN => IO_GPTMR_EN,
+    IO_XIP_EN => IO_XIP_EN,
+    IO_ONEWIRE_EN => IO_ONEWIRE_EN
     )
   port map (
     -- Global control --
@@ -342,7 +361,6 @@ begin
     wb_sel_o => wb_sel_o,
     wb_stb_o => wb_stb_o,
     wb_cyc_o => wb_cyc_o,
-    wb_lock_o => wb_lock_o,
     wb_ack_i => wb_ack_i,
     wb_err_i => wb_err_i,
 
@@ -350,15 +368,23 @@ begin
     fence_o => fence_o,
     fencei_o => fencei_o,
 
+    -- XIP (execute in place via SPI) signals (available if IO_XIP_EN = true) --
+    xip_csn_o => xip_csn_o,
+    xip_clk_o => xip_clk_o,
+    xip_sdi_i => xip_sdi_i,
+    xip_sdo_o => xip_sdo_o,
+
     -- TX stream interfaces (available if SLINK_NUM_TX > 0) --
     slink_tx_dat_o => slink_tx_dat_o,
     slink_tx_val_o => slink_tx_val_o,
     slink_tx_rdy_i => slink_tx_rdy_i,
+    slink_tx_lst_o => slink_tx_lst_o,
 
     -- RX stream interfaces (available if SLINK_NUM_RX > 0) --
     slink_rx_dat_i => slink_rx_dat_i,
     slink_rx_val_i => slink_rx_val_i,
     slink_rx_rdy_o => slink_rx_rdy_o,
+    slink_rx_lst_i => slink_rx_lst_i,
 
     -- GPIO (available if IO_GPIO_EN = true) --
     gpio_o => gpio_o,
@@ -385,6 +411,9 @@ begin
     -- TWI (available if IO_TWI_EN = true) --
     twi_sda_io => twi_sda_io,
     twi_scl_io => twi_scl_io,
+
+    -- 1-Wire Interface (available if IO_ONEWIRE_EN = true) --
+    onewire_io => onewire_io,
 
     -- PWM (available if IO_PWM_NUM_CH > 0) --
     pwm_o => pwm_o,

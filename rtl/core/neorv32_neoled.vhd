@@ -17,7 +17,7 @@
 -- # ********************************************************************************************* #
 -- # BSD 3-Clause License                                                                          #
 -- #                                                                                               #
--- # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+-- # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 -- #                                                                                               #
 -- # Redistribution and use in source and binary forms, with or without modification, are          #
 -- # permitted provided that the following conditions are met:                                     #
@@ -60,6 +60,7 @@ entity neorv32_neoled is
   port (
     -- host access --
     clk_i       : in  std_ulogic; -- global clock line
+    rstn_i      : in  std_ulogic; -- global reset line, low-active
     addr_i      : in  std_ulogic_vector(31 downto 0); -- address
     rden_i      : in  std_ulogic; -- read enable
     wren_i      : in  std_ulogic; -- write enable
@@ -199,9 +200,20 @@ begin
 
   -- Read/Write Access ----------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  rw_access: process(clk_i)
+  rw_access: process(rstn_i, clk_i)
   begin
-    if rising_edge(clk_i) then
+    if (rstn_i = '0') then
+      ctrl.enable   <= '0';
+      ctrl.mode     <= '0';
+      ctrl.strobe   <= '0';
+      ctrl.clk_prsc <= (others => '0');
+      ctrl.irq_conf <= '0';
+      ctrl.t_total  <= (others => '0');
+      ctrl.t0_high  <= (others => '0');
+      ctrl.t1_high  <= (others => '0');
+      ack_o         <= '-';
+      data_o        <= (others => '-');
+    elsif rising_edge(clk_i) then
       -- access acknowledge --
       ack_o <= wren or rden;
 
@@ -249,16 +261,6 @@ begin
 
   -- IRQ Generator --------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  irq_select: process(ctrl, tx_buffer, serial.done)
-  begin
-    if (FIFO_DEPTH = 1) or (ctrl.irq_conf = '1') then
-      irq.set <= tx_buffer.free and serial.done; -- fire IRQ if FIFO is empty
-    else
-      irq.set <= not tx_buffer.half; -- fire IRQ if FIFO is less than half-full
-    end if;
-  end process irq_select;
-
-  -- Interrupt Edge Detector --
   irq_detect: process(clk_i)
   begin
     if rising_edge(clk_i) then
@@ -269,6 +271,10 @@ begin
       end if;
     end if;
   end process irq_detect;
+
+  -- trigger select --
+  irq.set <= (tx_buffer.free and serial.done) when (FIFO_DEPTH = 1) or (ctrl.irq_conf = '1') else -- fire IRQ if FIFO is empty
+             (not tx_buffer.half); -- fire IRQ if FIFO is less than half-full
 
   -- IRQ request to CPU --
   irq_o <= '1' when (irq.buf = "01") else '0';
@@ -281,14 +287,14 @@ begin
     FIFO_DEPTH => FIFO_DEPTH, -- number of fifo entries; has to be a power of two; min 1
     FIFO_WIDTH => 32+2,       -- size of data elements in fifo
     FIFO_RSYNC => true,       -- sync read
-    FIFO_SAFE  => true        -- safe access
+    FIFO_SAFE  => true,       -- safe access
+    FIFO_GATE  => false       -- no output gate required
   )
   port map (
     -- control --
     clk_i   => clk_i,           -- clock, rising edge
     rstn_i  => '1',             -- async reset, low-active
     clear_i => tx_buffer.clear, -- sync reset, high-active
-    level_o => open,            -- fill level
     half_o  => tx_buffer.half,  -- FIFO is at least half full
     -- write port --
     wdata_i => tx_buffer.wdata, -- write data
@@ -317,7 +323,8 @@ begin
 
       -- FSM --
       if (ctrl.enable = '0') then -- disabled
-        serial.state <= S_IDLE;
+        serial.tx_out <= '0';
+        serial.state  <= S_IDLE;
       else
         case serial.state is
 
@@ -332,14 +339,15 @@ begin
 
           when S_INIT => -- initialize TX shift engine
           -- ------------------------------------------------------------
+            if (tx_buffer.rdata(32) = '0') then -- mode = "RGB" 
+              serial.mode    <= '0';
+              serial.bit_cnt <= "011000"; -- total number of bits to send: 3x8=24
+            else -- mode = "RGBW"
+              serial.mode    <= '1';
+              serial.bit_cnt <= "100000"; -- total number of bits to send: 4x8=32
+            end if;
+            --
             if (tx_buffer.rdata(33) = '0') then -- send data
-              if (tx_buffer.rdata(32) = '0') then -- mode = "RGB" 
-                serial.mode    <= '0';
-                serial.bit_cnt <= "011000"; -- total number of bits to send: 3x8=24
-              else -- mode = "RGBW"
-                serial.mode    <= '1';
-                serial.bit_cnt <= "100000"; -- total number of bits to send: 4x8=32
-              end if;
               serial.sreg  <= tx_buffer.rdata(31 downto 00);
               serial.state <= S_GETBIT;
             else -- send RESET command

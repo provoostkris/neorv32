@@ -3,7 +3,7 @@
 -- # ********************************************************************************************* #
 -- # BSD 3-Clause License                                                                          #
 -- #                                                                                               #
--- # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+-- # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 -- #                                                                                               #
 -- # Redistribution and use in source and binary forms, with or without modification, are          #
 -- # permitted provided that the following conditions are met:                                     #
@@ -44,7 +44,6 @@ entity neorv32_ProcessorTop_Minimal is
     HW_THREAD_ID                 : natural := 0;      -- hardware thread id (32-bit)
 
     -- RISC-V CPU Extensions --
-    CPU_EXTENSION_RISCV_A        : boolean := false;  -- implement atomic extension?
     CPU_EXTENSION_RISCV_C        : boolean := false;  -- implement compressed extension?
     CPU_EXTENSION_RISCV_E        : boolean := false;  -- implement embedded RF extension?
     CPU_EXTENSION_RISCV_M        : boolean := false;  -- implement mul/div extension?
@@ -56,11 +55,10 @@ entity neorv32_ProcessorTop_Minimal is
     -- Extension Options --
     FAST_MUL_EN                  : boolean := false;  -- use DSPs for M extension's multiplier
     FAST_SHIFT_EN                : boolean := false;  -- use barrel shifter for shift operations
-    CPU_CNT_WIDTH                : natural := 34;     -- total width of CPU cycle and instret counters (0..64)
 
     -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              : natural := 0;       -- number of regions (0..64)
-    PMP_MIN_GRANULARITY          : natural := 8*1024;  -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+    PMP_NUM_REGIONS              : natural := 0;       -- number of regions (0..16)
+    PMP_MIN_GRANULARITY          : natural := 4;       -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
 
     -- Hardware Performance Monitors (HPM) --
     HPM_NUM_CNTS                 : natural := 0;       -- number of implemented HPM counters (0..29)
@@ -121,7 +119,6 @@ begin
     ON_CHIP_DEBUGGER_EN          => false,  -- implement on-chip debugger?
 
     -- RISC-V CPU Extensions --
-    CPU_EXTENSION_RISCV_A        => CPU_EXTENSION_RISCV_A,         -- implement atomic extension?
     CPU_EXTENSION_RISCV_C        => CPU_EXTENSION_RISCV_C,         -- implement compressed extension?
     CPU_EXTENSION_RISCV_E        => CPU_EXTENSION_RISCV_E,         -- implement embedded RF extension?
     CPU_EXTENSION_RISCV_M        => CPU_EXTENSION_RISCV_M,         -- implement mul/div extension?
@@ -134,10 +131,9 @@ begin
     -- Extension Options --
     FAST_MUL_EN                  => FAST_MUL_EN,    -- use DSPs for M extension's multiplier
     FAST_SHIFT_EN                => FAST_SHIFT_EN,  -- use barrel shifter for shift operations
-    CPU_CNT_WIDTH                => CPU_CNT_WIDTH,  -- total width of CPU cycle and instret counters (0..64)
 
     -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              => PMP_NUM_REGIONS,       -- number of regions (0..64)
+    PMP_NUM_REGIONS              => PMP_NUM_REGIONS,       -- number of regions (0..16)
     PMP_MIN_GRANULARITY          => PMP_MIN_GRANULARITY,   -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
 
     -- Hardware Performance Monitors (HPM) --
@@ -199,7 +195,6 @@ begin
     wb_sel_o    => open,                         -- byte enable
     wb_stb_o    => open,                         -- strobe
     wb_cyc_o    => open,                         -- valid cycle
-    wb_lock_o   => open,                         -- exclusive access request
     wb_ack_i    => '0',                          -- transfer acknowledge
     wb_err_i    => '0',                          -- transfer error
 

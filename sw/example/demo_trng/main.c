@@ -3,7 +3,7 @@
 // # ********************************************************************************************* #
 // # BSD 3-Clause License                                                                          #
 // #                                                                                               #
-// # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+// # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 // #                                                                                               #
 // # Redistribution and use in source and binary forms, with or without modification, are          #
 // # permitted provided that the following conditions are met:                                     #
@@ -86,8 +86,14 @@ int main(void) {
 
   // check if TRNG unit is implemented at all
   if (neorv32_trng_available() == 0) {
-    neorv32_uart0_printf("No TRNG implemented.");
+    neorv32_uart0_printf("No TRNG implemented.\n");
     return 1;
+  }
+
+  // check if TRNG is using simulation mode
+  if (neorv32_trng_check_sim_mode() != 0) {
+    neorv32_uart0_printf("WARNING! TRNG uses simulation-only mode implementing a pseudo-RNG (LFSR)\n");
+    neorv32_uart0_printf("         instead of the physical entropy sources!\n");
   }
 
   // enable TRNG
@@ -139,6 +145,7 @@ void print_random_data(void) {
     neorv32_uart0_printf("%u ", (uint32_t)(trng_data));
     num_samples++;
     if (neorv32_uart0_char_received()) { // abort when key pressed
+      neorv32_uart0_char_received_get(); // discard received char
       break;
     }
   }
@@ -160,6 +167,8 @@ void generate_histogram(void) {
   neorv32_uart0_printf("Press any key to start.\n");
 
   while(neorv32_uart0_char_received() == 0);
+  neorv32_uart0_char_received_get(); // discard received char
+
   neorv32_uart0_printf("Sampling... Press any key to stop.\n");
 
   // clear histogram
@@ -186,6 +195,7 @@ void generate_histogram(void) {
     // abort conditions
     if ((neorv32_uart0_char_received()) || // abort when key pressed
         (cnt & 0x80000000UL)) { // to prevent overflow
+      neorv32_uart0_char_received_get(); // discard received char
       break;
     }
   }

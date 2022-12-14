@@ -34,8 +34,7 @@
 
 
 /**********************************************************************//**
- * @file neorv32_spi.c
- * @author Stephan Nolting
+ * @file neorv32_gptmr.c
  * @brief General purpose timer (GPTMR) HW driver source file.
  *
  * @note These functions should only be used if the GPTMR unit was synthesized (IO_GPTMR_EN = true).

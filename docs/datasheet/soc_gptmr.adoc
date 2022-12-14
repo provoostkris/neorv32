@@ -9,8 +9,8 @@
 | Software driver file(s): | neorv32_gptmr.c |
 |                          | neorv32_gptmr.h |
 | Top entity port:         | none | 
-| Configuration generics:  | _IO_GPTMR_EN_ | implement timer when _true_
-| CPU interrupts:          | fast IRQ channel 12 | transmission done interrupt (see <<_processor_interrupts>>)
+| Configuration generics:  | _IO_GPTMR_EN_ | implement general purpose timer when _true_
+| CPU interrupts:          | fast IRQ channel 12 | timer interrupt (see <<_processor_interrupts>>)
 |=======================
 
 
@@ -47,8 +47,10 @@ writing zero to it.
 **Timer Interrupt**
 
 The timer interrupt is triggered when the timer is enabled and `COUNT` matches `THRES`. The interrupt
-remains pending until explicitly cleared by writing the according `mip` CSR bit.
+remains pending until explicitly cleared by writing zero to the according <<_mip>> CSR bit.
 
+
+**Register Map**
 
 .GPTMR register map (`struct NEORV32_GPTMR`)
 [cols="<2,<2,<4,^1,<7"]

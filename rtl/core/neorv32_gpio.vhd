@@ -1,11 +1,12 @@
 -- #################################################################################################
 -- # << NEORV32 - General Purpose Parallel Input/Output Port (GPIO) >>                             #
 -- # ********************************************************************************************* #
--- # 64-bit general purpose parallel input & output port unit.                                     #
+-- # 64-bit general purpose parallel input & output port unit. Input/outputs are split into two    #
+-- # 32-bit memory-mapped registers each.                                                          #
 -- # ********************************************************************************************* #
 -- # BSD 3-Clause License                                                                          #
 -- #                                                                                               #
--- # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+-- # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 -- #                                                                                               #
 -- # Redistribution and use in source and binary forms, with or without modification, are          #
 -- # permitted provided that the following conditions are met:                                     #
@@ -45,12 +46,14 @@ entity neorv32_gpio is
   port (
     -- host access --
     clk_i  : in  std_ulogic; -- global clock line
+    rstn_i : in  std_ulogic; -- global reset line, low-active
     addr_i : in  std_ulogic_vector(31 downto 0); -- address
     rden_i : in  std_ulogic; -- read enable
     wren_i : in  std_ulogic; -- write enable
     data_i : in  std_ulogic_vector(31 downto 0); -- data in
     data_o : out std_ulogic_vector(31 downto 0); -- data out
     ack_o  : out std_ulogic; -- transfer acknowledge
+    err_o  : out std_ulogic; -- transfer error
     -- parallel io --
     gpio_o : out std_ulogic_vector(63 downto 0);
     gpio_i : in  std_ulogic_vector(63 downto 0)
@@ -70,8 +73,8 @@ architecture neorv32_gpio_rtl of neorv32_gpio is
   signal rden   : std_ulogic; -- read enable
 
   -- accessible regs --
-  signal din_lo,  din_hi  : std_ulogic_vector(31 downto 0); -- r/-
-  signal dout_lo, dout_hi : std_ulogic_vector(31 downto 0); -- r/w
+  signal din_hi,  din_lo  : std_ulogic_vector(31 downto 0); -- r/-: parallel input hi/lo
+  signal dout_hi, dout_lo : std_ulogic_vector(31 downto 0); -- r/w: parallel output hi/lo
 
 begin
 
@@ -85,11 +88,20 @@ begin
 
   -- Read/Write Access ----------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  rw_access: process(clk_i)
+  rw_access: process(rstn_i, clk_i)
   begin
-    if rising_edge(clk_i) then
+    if (rstn_i = '0') then
+      ack_o   <= '-';
+      err_o   <= '-';
+      dout_lo <= (others => '0');
+      dout_hi <= (others => '0');
+      din_lo  <= (others => '-');
+      din_hi  <= (others => '-');
+      data_o  <= (others => '-');
+    elsif rising_edge(clk_i) then
       -- bus handshake --
-      ack_o <= wren or rden;
+      ack_o <= (wren and addr(3)) or rden;
+      err_o <= wren and (not addr(3)); -- INPUT registers are read only!
 
       -- write access --
       if (wren = '1') then
@@ -101,7 +113,7 @@ begin
         end if;
       end if;
 
-      -- input buffer --
+      -- input buffer (prevent metastability) --
       din_lo <= gpio_i(31 downto 00);
       din_hi <= gpio_i(63 downto 32);
 

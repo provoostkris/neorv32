@@ -3,7 +3,7 @@
 -- # ********************************************************************************************* #
 -- # BSD 3-Clause License                                                                          #
 -- #                                                                                               #
--- # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+-- # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 -- #                                                                                               #
 -- # Redistribution and use in source and binary forms, with or without modification, are          #
 -- # permitted provided that the following conditions are met:                                     #
@@ -44,11 +44,11 @@ entity neorv32_ProcessorTop_stdlogic is
     -- General --
     CLOCK_FREQUENCY              : natural := 0;      -- clock frequency of clk_i in Hz
     INT_BOOTLOADER_EN            : boolean := true;   -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
+    CUSTOM_ID                    : std_logic_vector(31 downto 0) := x"00000000"; -- custom user-defined ID
     HW_THREAD_ID                 : natural := 0;      -- hardware thread id (32-bit)
     -- On-Chip Debugger (OCD) --
     ON_CHIP_DEBUGGER_EN          : boolean := false;  -- implement on-chip debugger
     -- RISC-V CPU Extensions --
-    CPU_EXTENSION_RISCV_A        : boolean := false;  -- implement atomic extension?
     CPU_EXTENSION_RISCV_B        : boolean := false;  -- implement bit-manipulation extension?
     CPU_EXTENSION_RISCV_C        : boolean := false;  -- implement compressed extension?
     CPU_EXTENSION_RISCV_E        : boolean := false;  -- implement embedded RF extension?
@@ -59,13 +59,15 @@ entity neorv32_ProcessorTop_stdlogic is
     CPU_EXTENSION_RISCV_Zicntr   : boolean := true;   -- implement base counters?
     CPU_EXTENSION_RISCV_Zihpm    : boolean := false;  -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei : boolean := false;  -- implement instruction stream sync.?
+    CPU_EXTENSION_RISCV_Zmmul    : boolean := false;  -- implement multiply-only M sub-extension?
+    CPU_EXTENSION_RISCV_Zxcfu    : boolean := false;  -- implement custom (instr.) functions unit?
     -- Extension Options --
     FAST_MUL_EN                  : boolean := false;  -- use DSPs for M extension's multiplier
     FAST_SHIFT_EN                : boolean := false;  -- use barrel shifter for shift operations
-    CPU_CNT_WIDTH                : natural := 64;     -- total width of CPU cycle and instret counters (0..64)
+    CPU_IPB_ENTRIES              : natural := 1;      -- entries in instruction prefetch buffer, has to be a power of 2, min 1
     -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              : natural := 0;      -- number of regions (0..64)
-    PMP_MIN_GRANULARITY          : natural := 64*1024; -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+    PMP_NUM_REGIONS              : natural := 0;      -- number of regions (0..16)
+    PMP_MIN_GRANULARITY          : natural := 4;      -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
     -- Hardware Performance Monitors (HPM) --
     HPM_NUM_CNTS                 : natural := 0;      -- number of implemented HPM counters (0..29)
     HPM_CNT_WIDTH                : natural := 40;     -- total size of HPM counters (0..64)
@@ -86,6 +88,7 @@ entity neorv32_ProcessorTop_stdlogic is
     MEM_EXT_PIPE_MODE            : boolean := false;  -- protocol: false=classic/standard wishbone mode, true=pipelined wishbone mode
     MEM_EXT_BIG_ENDIAN           : boolean := false;  -- byte order: true=big-endian, false=little-endian
     MEM_EXT_ASYNC_RX             : boolean := false;  -- use register buffer for RX data when false
+    MEM_EXT_ASYNC_TX             : boolean := false;  -- use register buffer for TX data when false
     -- Stream link interface --
     SLINK_NUM_TX                 : natural := 0;      -- number of TX links (0..8)
     SLINK_NUM_RX                 : natural := 0;      -- number of TX links (0..8)
@@ -105,16 +108,20 @@ entity neorv32_ProcessorTop_stdlogic is
     IO_UART1_RX_FIFO             : natural := 1;      -- RX fifo depth, has to be a power of two, min 1
     IO_UART1_TX_FIFO             : natural := 1;      -- TX fifo depth, has to be a power of two, min 1
     IO_SPI_EN                    : boolean := true;   -- implement serial peripheral interface (SPI)?
+    IO_SPI_FIFO                  : natural := 0;      -- SPI RTX fifo depth, has to be zero or a power of two
     IO_TWI_EN                    : boolean := true;   -- implement two-wire interface (TWI)?
     IO_PWM_NUM_CH                : natural := 4;      -- number of PWM channels to implement (0..60); 0 = disabled
     IO_WDT_EN                    : boolean := true;   -- implement watch dog timer (WDT)?
     IO_TRNG_EN                   : boolean := false;  -- implement true random number generator (TRNG)?
+    IO_TRNG_FIFO                 : natural := 1;      -- TRNG fifo depth, has to be a power of two, min 1
     IO_CFS_EN                    : boolean := false;  -- implement custom functions subsystem (CFS)?
     IO_CFS_CONFIG                : std_ulogic_vector(31 downto 0); -- custom CFS configuration generic
     IO_CFS_IN_SIZE               : positive := 32;    -- size of CFS input conduit in bits
     IO_CFS_OUT_SIZE              : positive := 32;    -- size of CFS output conduit in bits
     IO_NEOLED_EN                 : boolean := true;   -- implement NeoPixel-compatible smart LED interface (NEOLED)?
-    IO_GPTMR_EN                  : boolean := false   -- implement general purpose timer (GPTMR)?
+    IO_GPTMR_EN                  : boolean := false;  -- implement general purpose timer (GPTMR)?
+    IO_XIP_EN                    : boolean := false;  -- implement execute in place module (XIP)?
+    IO_ONEWIRE_EN                : boolean := false   -- implement 1-wire interface (ONEWIRE)?
   );
   port (
     -- Global control --
@@ -135,20 +142,26 @@ entity neorv32_ProcessorTop_stdlogic is
     wb_sel_o       : out std_logic_vector(03 downto 0); -- byte enable
     wb_stb_o       : out std_logic; -- strobe
     wb_cyc_o       : out std_logic; -- valid cycle
-    wb_lock_o      : out std_logic; -- exclusive access request
     wb_ack_i       : in  std_logic := '0'; -- transfer acknowledge
     wb_err_i       : in  std_logic := '0'; -- transfer error
     -- Advanced memory control signals (available if MEM_EXT_EN = true) --
     fence_o        : out std_logic; -- indicates an executed FENCE operation
     fencei_o       : out std_logic; -- indicates an executed FENCEI operation
+    -- XIP (execute in place via SPI) signals (available if IO_XIP_EN = true) --
+    xip_csn_o      : out std_logic; -- chip-select, low-active
+    xip_clk_o      : out std_logic; -- serial clock
+    xip_sdi_i      : in  std_logic := '0'; -- device data input
+    xip_sdo_o      : out std_logic; -- controller data output
     -- TX stream interfaces (available if SLINK_NUM_TX > 0) --
     slink_tx_dat_o : out sdata_8x32r_t; -- output data
     slink_tx_val_o : out std_logic_vector(7 downto 0); -- valid output
     slink_tx_rdy_i : in  std_logic_vector(7 downto 0) := (others => '0'); -- ready to send
+    slink_tx_lst_o : out std_logic_vector(7 downto 0); -- last data of package
     -- RX stream interfaces (available if SLINK_NUM_RX > 0) --
     slink_rx_dat_i : in  sdata_8x32r_t := (others => (others => '0')); -- input data
     slink_rx_val_i : in  std_logic_vector(7 downto 0) := (others => '0'); -- valid input
     slink_rx_rdy_o : out std_logic_vector(7 downto 0); -- ready to receive
+    slink_rx_lst_i : in  std_logic_vector(7 downto 0) := (others => '0'); -- last data of package
     -- GPIO (available if IO_GPIO_EN = true) --
     gpio_o         : out std_logic_vector(63 downto 0); -- parallel output
     gpio_i         : in  std_logic_vector(63 downto 0) := (others => '0'); -- parallel input
@@ -170,6 +183,8 @@ entity neorv32_ProcessorTop_stdlogic is
     -- TWI (available if IO_TWI_EN = true) --
     twi_sda_io     : inout std_logic; -- twi serial data line
     twi_scl_io     : inout std_logic; -- twi serial clock line
+    -- 1-Wire Interface (available if IO_ONEWIRE_EN = true) --
+    onewire_io     : inout std_logic; -- 1-wire bus
     -- PWM (available if IO_PWM_NUM_CH > 0) --
     pwm_o          : out std_logic_vector(59 downto 0); -- pwm channels
     -- Custom Functions Subsystem IO (available if IO_CFS_EN = true) --
@@ -192,6 +207,7 @@ end entity;
 architecture neorv32_ProcessorTop_stdlogic_rtl of neorv32_ProcessorTop_stdlogic is
 
   -- type conversion --
+  constant CUSTOM_ID_INT             : std_ulogic_vector(31 downto 0) := std_ulogic_vector(CUSTOM_ID);
   constant IO_CFS_CONFIG_INT         : std_ulogic_vector(31 downto 0) := std_ulogic_vector(IO_CFS_CONFIG);
   constant XIRQ_TRIGGER_TYPE_INT     : std_ulogic_vector(31 downto 0) := std_ulogic_vector(XIRQ_TRIGGER_TYPE);
   constant XIRQ_TRIGGER_POLARITY_INT : std_ulogic_vector(31 downto 0) := std_ulogic_vector(XIRQ_TRIGGER_POLARITY);
@@ -213,19 +229,25 @@ architecture neorv32_ProcessorTop_stdlogic_rtl of neorv32_ProcessorTop_stdlogic 
   signal wb_sel_o_int    : std_ulogic_vector(03 downto 0);
   signal wb_stb_o_int    : std_ulogic;
   signal wb_cyc_o_int    : std_ulogic;
-  signal wb_lock_o_int   : std_ulogic;
   signal wb_ack_i_int    : std_ulogic;
   signal wb_err_i_int    : std_ulogic;
   --
   signal fence_o_int     : std_ulogic;
   signal fencei_o_int    : std_ulogic;
   --
+  signal xip_csn_o_int   : std_ulogic;
+  signal xip_clk_o_int   : std_ulogic;
+  signal xip_sdi_i_int   : std_ulogic;
+  signal xip_sdo_o_int   : std_ulogic;
+  --
   signal slink_tx_dat_o_int : sdata_8x32_t;
   signal slink_tx_val_o_int : std_logic_vector(7 downto 0);
   signal slink_tx_rdy_i_int : std_logic_vector(7 downto 0);
+  signal slink_tx_lst_o_int : std_logic_vector(7 downto 0);
   signal slink_rx_dat_i_int : sdata_8x32_t;
   signal slink_rx_val_i_int : std_logic_vector(7 downto 0);
   signal slink_rx_rdy_o_int : std_logic_vector(7 downto 0);
+  signal slink_rx_lst_i_int : std_logic_vector(7 downto 0);
   --
   signal gpio_o_int      : std_ulogic_vector(63 downto 0);
   signal gpio_i_int      : std_ulogic_vector(63 downto 0);
@@ -269,29 +291,31 @@ begin
   generic map (
     -- General --
     CLOCK_FREQUENCY              => CLOCK_FREQUENCY,    -- clock frequency of clk_i in Hz
-    INT_BOOTLOADER_EN            => INT_BOOTLOADER_EN,  -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
     HW_THREAD_ID                 => HW_THREAD_ID,       -- hardware thread id (hartid) (32-bit)
+    CUSTOM_ID                    => CUSTOM_ID_INT,      -- custom user-defined ID
+    INT_BOOTLOADER_EN            => INT_BOOTLOADER_EN,  -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
     -- On-Chip Debugger (OCD) --
     ON_CHIP_DEBUGGER_EN          => ON_CHIP_DEBUGGER_EN,          -- implement on-chip debugger
     -- RISC-V CPU Extensions --
-    CPU_EXTENSION_RISCV_A        => CPU_EXTENSION_RISCV_A,        -- implement atomic extension?
     CPU_EXTENSION_RISCV_B        => CPU_EXTENSION_RISCV_B,        -- implement bit-manipulation extension?
     CPU_EXTENSION_RISCV_C        => CPU_EXTENSION_RISCV_C,        -- implement compressed extension?
     CPU_EXTENSION_RISCV_E        => CPU_EXTENSION_RISCV_E,        -- implement embedded RF extension?
-    CPU_EXTENSION_RISCV_M        => CPU_EXTENSION_RISCV_M,        -- implement muld/div extension?
+    CPU_EXTENSION_RISCV_M        => CPU_EXTENSION_RISCV_M,        -- implement mul/div extension?
     CPU_EXTENSION_RISCV_U        => CPU_EXTENSION_RISCV_U,        -- implement user mode extension?
     CPU_EXTENSION_RISCV_Zfinx    => CPU_EXTENSION_RISCV_Zfinx,    -- implement 32-bit floating-point extension (using INT reg!)
     CPU_EXTENSION_RISCV_Zicsr    => CPU_EXTENSION_RISCV_Zicsr,    -- implement CSR system?
     CPU_EXTENSION_RISCV_Zicntr   => CPU_EXTENSION_RISCV_Zicntr,   -- implement base counters?
     CPU_EXTENSION_RISCV_Zihpm    => CPU_EXTENSION_RISCV_Zihpm,    -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei => CPU_EXTENSION_RISCV_Zifencei, -- implement instruction stream sync.?
+    CPU_EXTENSION_RISCV_Zmmul    => CPU_EXTENSION_RISCV_Zmmul,    -- implement multiply-only M sub-extension?
+    CPU_EXTENSION_RISCV_Zxcfu    => CPU_EXTENSION_RISCV_Zxcfu,    -- implement custom (instr.) functions unit?
     -- Extension Options --
     FAST_MUL_EN                  => FAST_MUL_EN,        -- use DSPs for M extension's multiplier
     FAST_SHIFT_EN                => FAST_SHIFT_EN,      -- use barrel shifter for shift operations
-    CPU_CNT_WIDTH                => CPU_CNT_WIDTH,      -- total width of CPU cycle and instret counters (0..64)
+    CPU_IPB_ENTRIES              => CPU_IPB_ENTRIES,    -- entries in instruction prefetch buffer, has to be a power of 2, min 1
     -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              => PMP_NUM_REGIONS,    -- number of regions (0..64)
-    PMP_MIN_GRANULARITY          => PMP_MIN_GRANULARITY, -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+    PMP_NUM_REGIONS              => PMP_NUM_REGIONS,    -- number of regions (0..16)
+    PMP_MIN_GRANULARITY          => PMP_MIN_GRANULARITY, -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
     -- Hardware Performance Monitors (HPM) --
     HPM_NUM_CNTS                 => HPM_NUM_CNTS,       -- number of implemented HPM counters (0..29)
     HPM_CNT_WIDTH                => HPM_CNT_WIDTH,      -- total size of HPM counters (0..64)
@@ -312,6 +336,7 @@ begin
     MEM_EXT_PIPE_MODE            => MEM_EXT_PIPE_MODE,  -- protocol: false=classic/standard wishbone mode, true=pipelined wishbone mode
     MEM_EXT_BIG_ENDIAN           => MEM_EXT_BIG_ENDIAN, -- byte order: true=big-endian, false=little-endian
     MEM_EXT_ASYNC_RX             => MEM_EXT_ASYNC_RX,   -- use register buffer for RX data when false
+    MEM_EXT_ASYNC_TX             => MEM_EXT_ASYNC_TX,   -- use register buffer for TX data when false
     -- Stream link interface --
     SLINK_NUM_TX                 => SLINK_NUM_TX,       -- number of TX links (0..8)
     SLINK_NUM_RX                 => SLINK_NUM_RX,       -- number of TX links (0..8)
@@ -331,16 +356,20 @@ begin
     IO_UART1_RX_FIFO             => IO_UART1_RX_FIFO,   -- RX fifo depth, has to be a power of two, min 1
     IO_UART1_TX_FIFO             => IO_UART1_TX_FIFO,   -- TX fifo depth, has to be a power of two, min 1
     IO_SPI_EN                    => IO_SPI_EN,          -- implement serial peripheral interface (SPI)?
+    IO_SPI_FIFO                  => IO_SPI_FIFO,        -- SPI RTX fifo depth, has to be zero or a power of two
     IO_TWI_EN                    => IO_TWI_EN,          -- implement two-wire interface (TWI)?
     IO_PWM_NUM_CH                => IO_PWM_NUM_CH,      -- number of PWM channels to implement (0..60); 0 = disabled
     IO_WDT_EN                    => IO_WDT_EN,          -- implement watch dog timer (WDT)?
     IO_TRNG_EN                   => IO_TRNG_EN,         -- implement true random number generator (TRNG)?
+    IO_TRNG_FIFO                 => IO_TRNG_FIFO,       -- TRNG fifo depth, has to be a power of two, min 1
     IO_CFS_EN                    => IO_CFS_EN,          -- implement custom functions subsystem (CFS)?
     IO_CFS_CONFIG                => IO_CFS_CONFIG_INT,  -- custom CFS configuration generic
     IO_CFS_IN_SIZE               => IO_CFS_IN_SIZE,     -- size of CFS input conduit in bits
     IO_CFS_OUT_SIZE              => IO_CFS_OUT_SIZE,    -- size of CFS output conduit in bits
     IO_NEOLED_EN                 => IO_NEOLED_EN,       -- implement NeoPixel-compatible smart LED interface (NEOLED)?
-    IO_GPTMR_EN                  => IO_GPTMR_EN         -- implement general purpose timer (GPTMR)?
+    IO_GPTMR_EN                  => IO_GPTMR_EN,        -- implement general purpose timer (GPTMR)?
+    IO_XIP_EN                    => IO_XIP_EN,          -- implement execute in place module (XIP)?
+    IO_ONEWIRE_EN                => IO_ONEWIRE_EN       -- implement 1-wire interface (ONEWIRE)?
   )
   port map (
     -- Global control --
@@ -361,20 +390,26 @@ begin
     wb_sel_o       => wb_sel_o_int,    -- byte enable
     wb_stb_o       => wb_stb_o_int,    -- strobe
     wb_cyc_o       => wb_cyc_o_int,    -- valid cycle
-    wb_lock_o      => wb_lock_o_int,   -- exclusive access request
     wb_ack_i       => wb_ack_i_int,    -- transfer acknowledge
     wb_err_i       => wb_err_i_int,    -- transfer error
     -- Advanced memory control signals (available if MEM_EXT_EN = true) --
     fence_o        => fence_o_int,     -- indicates an executed FENCE operation
     fencei_o       => fencei_o_int,    -- indicates an executed FENCEI operation
+    -- XIP (execute in place via SPI) signals (available if IO_XIP_EN = true) --
+    xip_csn_o      => xip_csn_o_int,   -- chip-select, low-active
+    xip_clk_o      => xip_clk_o_int,   -- serial clock
+    xip_sdi_i      => xip_sdi_i_int,   -- device data input
+    xip_sdo_o      => xip_sdo_o_int,   -- controller data output
     -- TX stream interfaces (available if SLINK_NUM_TX > 0) --
     slink_tx_dat_o => slink_tx_dat_o_int, -- output data
     slink_tx_val_o => slink_tx_val_o_int, -- valid output
     slink_tx_rdy_i => slink_tx_rdy_i_int, -- ready to send
+    slink_tx_lst_o => slink_tx_lst_o_int, -- last data of package
     -- RX stream interfaces (available if SLINK_NUM_RX > 0) --
     slink_rx_dat_i => slink_rx_dat_i_int, -- input data
     slink_rx_val_i => slink_rx_val_i_int, -- valid input
     slink_rx_rdy_o => slink_rx_rdy_o_int, -- ready to receive
+    slink_rx_lst_i => slink_rx_lst_i_int, -- last data of package
     -- GPIO (available if IO_GPIO_EN = true) --
     gpio_o         => gpio_o_int,      -- parallel output
     gpio_i         => gpio_i_int,      -- parallel input
@@ -396,6 +431,8 @@ begin
     -- TWI (available if IO_TWI_EN = true) --
     twi_sda_io     => twi_sda_io,      -- twi serial data line
     twi_scl_io     => twi_scl_io,      -- twi serial clock line
+    -- 1-Wire Interface (available if IO_ONEWIRE_EN = true) --
+    onewire_io     => onewire_io,      -- 1-wire bus
     -- PWM (available if IO_PWM_NUM_CH > 0) --
     pwm_o          => pwm_o_int,       -- pwm channels
     -- Custom Functions Subsystem IO (available if IO_CFS_EN = true) --
@@ -432,17 +469,23 @@ begin
   wb_sel_o        <= std_logic_vector(wb_sel_o_int);
   wb_stb_o        <= std_logic(wb_stb_o_int);
   wb_cyc_o        <= std_logic(wb_cyc_o_int);
-  wb_lock_o       <= std_logic(wb_lock_o_int);
   wb_ack_i_int    <= std_ulogic(wb_ack_i);
   wb_err_i_int    <= std_ulogic(wb_err_i);
 
   fence_o         <= std_logic(fence_o_int);
   fencei_o        <= std_logic(fencei_o_int);
 
+  xip_csn_o       <= std_logic(xip_csn_o_int);
+  xip_clk_o       <= std_logic(xip_clk_o_int);
+  xip_sdi_i_int   <= std_ulogic(xip_sdi_i);
+  xip_sdo_o       <= std_logic(xip_sdo_o_int);
+
   slink_tx_val_o     <= std_logic_vector(slink_tx_val_o_int);
   slink_tx_rdy_i_int <= std_ulogic_vector(slink_tx_rdy_i);
+  slink_rx_lst_i_int <= std_ulogic_vector(slink_rx_lst_i);
   slink_rx_val_i_int <= std_ulogic_vector(slink_rx_val_i);
   slink_rx_rdy_o     <= std_logic_vector(slink_rx_rdy_o_int);
+  slink_tx_lst_o     <= std_logic_vector(slink_tx_lst_o_int);
 
   slink_conv:
   for i in 0 to 7 generate

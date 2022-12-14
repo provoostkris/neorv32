@@ -6,7 +6,7 @@
 -- # ********************************************************************************************* #
 -- # BSD 3-Clause License                                                                          #
 -- #                                                                                               #
--- # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+-- # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 -- #                                                                                               #
 -- # Redistribution and use in source and binary forms, with or without modification, are          #
 -- # permitted provided that the following conditions are met:                                     #
@@ -49,12 +49,12 @@ entity neorv32_SystemTop_axi4lite is
     -- ------------------------------------------------------------
     -- General --
     CLOCK_FREQUENCY              : natural := 0;      -- clock frequency of clk_i in Hz
-    INT_BOOTLOADER_EN            : boolean := true;   -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
     HW_THREAD_ID                 : natural := 0;      -- hardware thread id (32-bit)
+    CUSTOM_ID                    : std_logic_vector(31 downto 0) := x"00000000"; -- custom user-defined ID
+    INT_BOOTLOADER_EN            : boolean := true;   -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
     -- On-Chip Debugger (OCD) --
     ON_CHIP_DEBUGGER_EN          : boolean := false;  -- implement on-chip debugger
     -- RISC-V CPU Extensions --
-    CPU_EXTENSION_RISCV_A        : boolean := false;  -- implement atomic extension?
     CPU_EXTENSION_RISCV_B        : boolean := false;  -- implement bit-manipulation extension?
     CPU_EXTENSION_RISCV_C        : boolean := false;  -- implement compressed extension?
     CPU_EXTENSION_RISCV_E        : boolean := false;  -- implement embedded RF extension?
@@ -65,13 +65,14 @@ entity neorv32_SystemTop_axi4lite is
     CPU_EXTENSION_RISCV_Zicntr   : boolean := true;   -- implement base counters?
     CPU_EXTENSION_RISCV_Zihpm    : boolean := false;  -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei : boolean := false;  -- implement instruction stream sync.?
+    CPU_EXTENSION_RISCV_Zmmul    : boolean := false;  -- implement multiply-only M sub-extension?
+    CPU_EXTENSION_RISCV_Zxcfu    : boolean := false;  -- implement custom (instr.) functions unit?
     -- Extension Options --
     FAST_MUL_EN                  : boolean := false;  -- use DSPs for M extension's multiplier
     FAST_SHIFT_EN                : boolean := false;  -- use barrel shifter for shift operations
-    CPU_CNT_WIDTH                : natural := 64;     -- total width of CPU cycle and instret counters (0..64)
     -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              : natural := 0;      -- number of regions (0..64)
-    PMP_MIN_GRANULARITY          : natural := 64*1024; -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+    PMP_NUM_REGIONS              : natural := 0;      -- number of regions (0..16)
+    PMP_MIN_GRANULARITY          : natural := 4;      -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
     -- Hardware Performance Monitors (HPM) --
     HPM_NUM_CNTS                 : natural := 0;      -- number of implemented HPM counters (0..29)
     HPM_CNT_WIDTH                : natural := 40;     -- total size of HPM counters (0..64)
@@ -100,17 +101,21 @@ entity neorv32_SystemTop_axi4lite is
     IO_UART1_RX_FIFO             : natural := 1;      -- RX fifo depth, has to be a power of two, min 1
     IO_UART1_TX_FIFO             : natural := 1;      -- TX fifo depth, has to be a power of two, min 1
     IO_SPI_EN                    : boolean := true;   -- implement serial peripheral interface (SPI)?
+    IO_SPI_FIFO                  : natural := 0;      -- SPI RTX fifo depth, has to be zero or a power of two
     IO_TWI_EN                    : boolean := true;   -- implement two-wire interface (TWI)?
-    IO_PWM_NUM_CH                : natural := 4;      -- number of PWM channels to implement (0..60); 0 = disabled
+    IO_PWM_NUM_CH                : natural := 0;      -- number of PWM channels to implement (0..60); 0 = disabled
     IO_WDT_EN                    : boolean := true;   -- implement watch dog timer (WDT)?
     IO_TRNG_EN                   : boolean := true;   -- implement true random number generator (TRNG)?
+    IO_TRNG_FIFO                 : natural := 1;      -- TRNG fifo depth, has to be a power of two, min 1
     IO_CFS_EN                    : boolean := false;  -- implement custom functions subsystem (CFS)?
     IO_CFS_CONFIG                : std_logic_vector(31 downto 0) := x"00000000"; -- custom CFS configuration generic
     IO_CFS_IN_SIZE               : positive := 32;    -- size of CFS input conduit in bits
     IO_CFS_OUT_SIZE              : positive := 32;    -- size of CFS output conduit in bits
     IO_NEOLED_EN                 : boolean := true;   -- implement NeoPixel-compatible smart LED interface (NEOLED)?
     IO_NEOLED_TX_FIFO            : natural := 1;      -- NEOLED TX FIFO depth, 1..32k, has to be a power of two
-    IO_GPTMR_EN                  : boolean := false   -- implement general purpose timer (GPTMR)?
+    IO_GPTMR_EN                  : boolean := false;  -- implement general purpose timer (GPTMR)?
+    IO_XIP_EN                    : boolean := false;  -- implement execute in place module (XIP)?
+    IO_ONEWIRE_EN                : boolean := false   -- implement 1-wire interface (ONEWIRE)?
   );
   port (
     -- ------------------------------------------------------------
@@ -154,6 +159,11 @@ entity neorv32_SystemTop_axi4lite is
     -- ------------------------------------------------------------
     -- Processor IO --
     -- ------------------------------------------------------------
+    -- XIP (execute in place via SPI) signals (available if IO_XIP_EN = true) --
+    xip_csn_o     : out std_logic; -- chip-select, low-active
+    xip_clk_o     : out std_logic; -- serial clock
+    xip_sdi_i     : in  std_logic := '0'; -- device data input
+    xip_sdo_o     : out std_logic; -- controller data output
     -- GPIO (available if IO_GPIO_EN = true) --
     gpio_o        : out std_logic_vector(63 downto 0); -- parallel output
     gpio_i        : in  std_logic_vector(63 downto 0) := (others => '0'); -- parallel input
@@ -175,6 +185,8 @@ entity neorv32_SystemTop_axi4lite is
     -- TWI (available if IO_TWI_EN = true) --
     twi_sda_io    : inout std_logic; -- twi serial data line
     twi_scl_io    : inout std_logic; -- twi serial clock line
+    -- 1-Wire Interface (available if IO_ONEWIRE_EN = true) --
+    onewire_io     : inout std_logic; -- 1-wire bus
     -- PWM (available if IO_PWM_NUM_CH > 0) --
     pwm_o         : out std_logic_vector(59 downto 0);  -- pwm channels
     -- Custom Functions Subsystem IO (available if IO_CFS_EN = true) --
@@ -193,6 +205,7 @@ end entity;
 architecture neorv32_SystemTop_axi4lite_rtl of neorv32_SystemTop_axi4lite is
 
   -- type conversion --
+  constant CUSTOM_ID_INT             : std_ulogic_vector(31 downto 0) := std_ulogic_vector(CUSTOM_ID);
   constant IO_CFS_CONFIG_INT         : std_ulogic_vector(31 downto 0) := std_ulogic_vector(IO_CFS_CONFIG);
   constant XIRQ_TRIGGER_TYPE_INT     : std_ulogic_vector(31 downto 0) := std_ulogic_vector(XIRQ_TRIGGER_TYPE);
   constant XIRQ_TRIGGER_POLARITY_INT : std_ulogic_vector(31 downto 0) := std_ulogic_vector(XIRQ_TRIGGER_POLARITY);
@@ -205,6 +218,11 @@ architecture neorv32_SystemTop_axi4lite_rtl of neorv32_SystemTop_axi4lite is
   signal jtag_tdi_i_int  :std_ulogic;
   signal jtag_tdo_o_int  :std_ulogic;
   signal jtag_tms_i_int  :std_ulogic;
+  --
+  signal xip_csn_o_int   : std_ulogic;
+  signal xip_clk_o_int   : std_ulogic;
+  signal xip_sdi_i_int   : std_ulogic;
+  signal xip_sdo_o_int   : std_ulogic;
   --
   signal gpio_o_int      : std_ulogic_vector(63 downto 0);
   signal gpio_i_int      : std_ulogic_vector(63 downto 0);
@@ -238,17 +256,16 @@ architecture neorv32_SystemTop_axi4lite_rtl of neorv32_SystemTop_axi4lite is
 
   -- internal wishbone bus --
   type wb_bus_t is record
-    adr  : std_ulogic_vector(31 downto 0); -- address
-    di   : std_ulogic_vector(31 downto 0); -- processor input data
-    do   : std_ulogic_vector(31 downto 0); -- processor output data
-    we   : std_ulogic; -- write enable
-    sel  : std_ulogic_vector(03 downto 0); -- byte enable
-    stb  : std_ulogic; -- strobe
-    cyc  : std_ulogic; -- valid cycle
-    ack  : std_ulogic; -- transfer acknowledge
-    err  : std_ulogic; -- transfer error
-    tag  : std_ulogic_vector(02 downto 0); -- tag
-    lock : std_ulogic; -- exclusive access request
+    adr : std_ulogic_vector(31 downto 0); -- address
+    di  : std_ulogic_vector(31 downto 0); -- processor input data
+    do  : std_ulogic_vector(31 downto 0); -- processor output data
+    we  : std_ulogic; -- write enable
+    sel : std_ulogic_vector(03 downto 0); -- byte enable
+    stb : std_ulogic; -- strobe
+    cyc : std_ulogic; -- valid cycle
+    ack : std_ulogic; -- transfer acknowledge
+    err : std_ulogic; -- transfer error
+    tag : std_ulogic_vector(02 downto 0); -- tag
   end record;
   signal wb_core : wb_bus_t;
 
@@ -265,40 +282,37 @@ architecture neorv32_SystemTop_axi4lite_rtl of neorv32_SystemTop_axi4lite is
 
 begin
 
-  -- Sanity Checks --------------------------------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  assert not (CPU_EXTENSION_RISCV_A = true) report "NEORV32 PROCESSOR CONFIG WARNING: AXI4-Lite provides NO support for atomic memory operations. LR/SC access via AXI will raise a bus exception." severity warning;
-
-
   -- The Core Of The Problem ----------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   neorv32_top_inst: neorv32_top
   generic map (
     -- General --
     CLOCK_FREQUENCY              => CLOCK_FREQUENCY,    -- clock frequency of clk_i in Hz
-    INT_BOOTLOADER_EN            => INT_BOOTLOADER_EN,  -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
     HW_THREAD_ID                 => HW_THREAD_ID,       -- hardware thread id (hartid)
+    CUSTOM_ID                    => CUSTOM_ID_INT,      -- custom user-defined ID
+    INT_BOOTLOADER_EN            => INT_BOOTLOADER_EN,  -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
     -- On-Chip Debugger (OCD) --
     ON_CHIP_DEBUGGER_EN          => ON_CHIP_DEBUGGER_EN,          -- implement on-chip debugger
     -- RISC-V CPU Extensions --
-    CPU_EXTENSION_RISCV_A        => CPU_EXTENSION_RISCV_A,        -- implement atomic extension?
     CPU_EXTENSION_RISCV_B        => CPU_EXTENSION_RISCV_B,        -- implement bit-manipulation extension?
     CPU_EXTENSION_RISCV_C        => CPU_EXTENSION_RISCV_C,        -- implement compressed extension?
     CPU_EXTENSION_RISCV_E        => CPU_EXTENSION_RISCV_E,        -- implement embedded RF extension?
-    CPU_EXTENSION_RISCV_M        => CPU_EXTENSION_RISCV_M,        -- implement muld/div extension?
+    CPU_EXTENSION_RISCV_M        => CPU_EXTENSION_RISCV_M,        -- implement mul/div extension?
     CPU_EXTENSION_RISCV_U        => CPU_EXTENSION_RISCV_U,        -- implement user mode extension?
     CPU_EXTENSION_RISCV_Zfinx    => CPU_EXTENSION_RISCV_Zfinx,    -- implement 32-bit floating-point extension (using INT reg!)
     CPU_EXTENSION_RISCV_Zicsr    => CPU_EXTENSION_RISCV_Zicsr,    -- implement CSR system?
     CPU_EXTENSION_RISCV_Zicntr   => CPU_EXTENSION_RISCV_Zicntr,   -- implement base counters?
     CPU_EXTENSION_RISCV_Zihpm    => CPU_EXTENSION_RISCV_Zihpm,    -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei => CPU_EXTENSION_RISCV_Zifencei, -- implement instruction stream sync.?
+    CPU_EXTENSION_RISCV_Zmmul    => CPU_EXTENSION_RISCV_Zmmul,    -- implement multiply-only M sub-extension?
+    CPU_EXTENSION_RISCV_Zxcfu    => CPU_EXTENSION_RISCV_Zxcfu,    -- implement custom (instr.) functions unit?
     -- Extension Options --
     FAST_MUL_EN                  => FAST_MUL_EN,        -- use DSPs for M extension's multiplier
     FAST_SHIFT_EN                => FAST_SHIFT_EN,      -- use barrel shifter for shift operations
-    CPU_CNT_WIDTH                => CPU_CNT_WIDTH,      -- total width of CPU cycle and instret counters (0..64)
+    CPU_IPB_ENTRIES              => 2,                  -- entries is instruction prefetch buffer, has to be a power of 2, min 1
     -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              => PMP_NUM_REGIONS,    -- number of regions (0..64)
-    PMP_MIN_GRANULARITY          => PMP_MIN_GRANULARITY, -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+    PMP_NUM_REGIONS              => PMP_NUM_REGIONS,    -- number of regions (0..16)
+    PMP_MIN_GRANULARITY          => PMP_MIN_GRANULARITY, -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
     -- Hardware Performance Monitors (HPM) --
     HPM_NUM_CNTS                 => HPM_NUM_CNTS,       -- number of implemented HPM counters (0..29)
     HPM_CNT_WIDTH                => HPM_CNT_WIDTH,      -- total size of HPM counters (0..64)
@@ -319,6 +333,7 @@ begin
     MEM_EXT_PIPE_MODE            => false,              -- protocol: false=classic/standard wishbone mode, true=pipelined wishbone mode
     MEM_EXT_BIG_ENDIAN           => false,              -- byte order: true=big-endian, false=little-endian
     MEM_EXT_ASYNC_RX             => false,              -- use register buffer for RX data when false
+    MEM_EXT_ASYNC_TX             => false,              -- use register buffer for TX data when false
     -- External Interrupts Controller (XIRQ) --
     XIRQ_NUM_CH                  => XIRQ_NUM_CH, -- number of external IRQ channels (0..32)
     XIRQ_TRIGGER_TYPE            => XIRQ_TRIGGER_TYPE_INT, -- trigger type: 0=level, 1=edge
@@ -333,17 +348,21 @@ begin
     IO_UART1_RX_FIFO             => IO_UART1_RX_FIFO,   -- RX fifo depth, has to be a power of two, min 1
     IO_UART1_TX_FIFO             => IO_UART1_TX_FIFO,   -- TX fifo depth, has to be a power of two, min 1
     IO_SPI_EN                    => IO_SPI_EN,          -- implement serial peripheral interface (SPI)?
+    IO_SPI_FIFO                  => IO_SPI_FIFO,        -- SPI RTX fifo depth, has to be zero or a power of two
     IO_TWI_EN                    => IO_TWI_EN,          -- implement two-wire interface (TWI)?
     IO_PWM_NUM_CH                => IO_PWM_NUM_CH,      -- number of PWM channels to implement (0..60); 0 = disabled
     IO_WDT_EN                    => IO_WDT_EN,          -- implement watch dog timer (WDT)?
     IO_TRNG_EN                   => IO_TRNG_EN,         -- implement true random number generator (TRNG)?
+    IO_TRNG_FIFO                 => IO_TRNG_FIFO,       -- TRNG fifo depth, has to be a power of two, min 1
     IO_CFS_EN                    => IO_CFS_EN,          -- implement custom functions subsystem (CFS)?
     IO_CFS_CONFIG                => IO_CFS_CONFIG_INT,  -- custom CFS configuration generic
     IO_CFS_IN_SIZE               => IO_CFS_IN_SIZE,     -- size of CFS input conduit in bits
     IO_CFS_OUT_SIZE              => IO_CFS_OUT_SIZE,    -- size of CFS output conduit in bits
     IO_NEOLED_EN                 => IO_NEOLED_EN,       -- implement NeoPixel-compatible smart LED interface (NEOLED)?
     IO_NEOLED_TX_FIFO            => IO_NEOLED_TX_FIFO,  -- NEOLED TX FIFO depth, 1..32k, has to be a power of two
-    IO_GPTMR_EN                  => IO_GPTMR_EN         -- implement general purpose timer (GPTMR)?
+    IO_GPTMR_EN                  => IO_GPTMR_EN,        -- implement general purpose timer (GPTMR)?
+    IO_XIP_EN                    => IO_XIP_EN,          -- implement execute in place module (XIP)?
+    IO_ONEWIRE_EN                => IO_ONEWIRE_EN       -- implement 1-wire interface (ONEWIRE)?
   )
   port map (
     -- Global control --
@@ -364,12 +383,16 @@ begin
     wb_sel_o    => wb_core.sel,     -- byte enable
     wb_stb_o    => wb_core.stb,     -- strobe
     wb_cyc_o    => wb_core.cyc,     -- valid cycle
-    wb_lock_o   => wb_core.lock,    -- exclusive access request
     wb_ack_i    => wb_core.ack,     -- transfer acknowledge
     wb_err_i    => wb_core.err,     -- transfer error
     -- Advanced memory control signals (available if MEM_EXT_EN = true) --
     fence_o     => open,            -- indicates an executed FENCE operation
     fencei_o    => open,            -- indicates an executed FENCEI operation
+    -- XIP (execute in place via SPI) signals (available if IO_XIP_EN = true) --
+    xip_csn_o   => xip_csn_o_int,   -- chip-select, low-active
+    xip_clk_o   => xip_clk_o_int,   -- serial clock
+    xip_sdi_i   => xip_sdi_i_int,   -- device data input
+    xip_sdo_o   => xip_sdo_o_int,   -- controller data output
     -- GPIO (available if IO_GPIO_EN = true) --
     gpio_o      => gpio_o_int,      -- parallel output
     gpio_i      => gpio_i_int,      -- parallel input
@@ -391,6 +414,8 @@ begin
     -- TWI (available if IO_TWI_EN = true) --
     twi_sda_io  => twi_sda_io,      -- twi serial data line
     twi_scl_io  => twi_scl_io,      -- twi serial clock line
+    -- 1-Wire Interface (available if IO_ONEWIRE_EN = true) --
+    onewire_io  => onewire_io,      -- 1-wire bus
     -- PWM available if IO_PWM_NUM_CH > 0) --
     pwm_o       => pwm_o_int,       -- pwm channels
     -- Custom Functions Subsystem IO (available if IO_CFS_EN = true) --
@@ -410,6 +435,11 @@ begin
   );
 
   -- type conversion --
+  xip_csn_o       <= std_logic(xip_csn_o_int);
+  xip_clk_o       <= std_logic(xip_clk_o_int);
+  xip_sdi_i_int   <= std_ulogic(xip_sdi_i);
+  xip_sdo_o       <= std_logic(xip_sdo_o_int);
+
   gpio_o          <= std_logic_vector(gpio_o_int);
   gpio_i_int      <= std_ulogic_vector(gpio_i);
 
@@ -486,9 +516,8 @@ begin
 
 
   -- AXI4-Lite Global Signals --
-  clk_i_int     <= std_ulogic(m_axi_aclk);
-  rstn_i_int    <= std_ulogic(m_axi_aresetn);
-
+  clk_i_int    <= std_ulogic(m_axi_aclk);
+  rstn_i_int   <= std_ulogic(m_axi_aresetn);
 
   -- AXI4-Lite Read Address Channel --
   m_axi_araddr  <= std_logic_vector(wb_core.adr);
@@ -499,11 +528,10 @@ begin
   m_axi_arprot(2) <= wb_core.tag(2); -- 0:data access, 1:instruction access
 
   -- AXI4-Lite Read Data Channel --
-  m_axi_rready  <= std_logic(wb_core.cyc and (not wb_core.we));
-  wb_core.di    <= std_ulogic_vector(m_axi_rdata);
-  ack_read      <= std_ulogic(m_axi_rvalid);
-  err_read      <= '0' when (m_axi_rresp = "00") else '1'; -- read response = ok? check this signal only when m_axi_rvalid = '1'
-
+  m_axi_rready <= std_logic(wb_core.cyc and (not wb_core.we));
+  wb_core.di   <= std_ulogic_vector(m_axi_rdata);
+  ack_read     <= std_ulogic(m_axi_rvalid);
+  err_read     <= '0' when (m_axi_rresp = "00") else '1'; -- read response = ok? check this signal only when m_axi_rvalid = '1'
 
   -- AXI4-Lite Write Address Channel --
   m_axi_awaddr  <= std_logic_vector(wb_core.adr);
@@ -514,19 +542,18 @@ begin
   m_axi_awprot(2) <= wb_core.tag(2); -- 0:data access, 1:instruction access
 
   -- AXI4-Lite Write Data Channel --
-  m_axi_wdata   <= std_logic_vector(wb_core.do);
-  m_axi_wvalid  <= std_logic((wb_core.cyc and wb_core.we) and (not ctrl.wdat_received));
-  m_axi_wstrb   <= std_logic_vector(wb_core.sel); -- byte-enable
+  m_axi_wdata  <= std_logic_vector(wb_core.do);
+  m_axi_wvalid <= std_logic((wb_core.cyc and wb_core.we) and (not ctrl.wdat_received));
+  m_axi_wstrb  <= std_logic_vector(wb_core.sel); -- byte-enable
 
   -- AXI4-Lite Write Response Channel --
-  m_axi_bready  <= std_logic(wb_core.cyc and wb_core.we);
-  ack_write     <= std_ulogic(m_axi_bvalid);
-  err_write     <= '0' when (m_axi_bresp = "00") else '1'; -- write response = ok? check this signal only when m_axi_bvalid = '1'
-
+  m_axi_bready <= std_logic(wb_core.cyc and wb_core.we);
+  ack_write    <= std_ulogic(m_axi_bvalid);
+  err_write    <= '0' when (m_axi_bresp = "00") else '1'; -- write response = ok? check this signal only when m_axi_bvalid = '1'
 
   -- Wishbone transfer termination --
-  wb_core.ack   <= ack_read or ack_write;
-  wb_core.err   <= (ack_read and err_read) or (ack_write and err_write) or wb_core.lock;
+  wb_core.ack <= ack_read or ack_write;
+  wb_core.err <= (ack_read and err_read) or (ack_write and err_write);
 
 
 end architecture;

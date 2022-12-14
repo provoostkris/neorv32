@@ -3,7 +3,7 @@
 -- # ********************************************************************************************* #
 -- # BSD 3-Clause License                                                                          #
 -- #                                                                                               #
--- # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+-- # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 -- #                                                                                               #
 -- # Redistribution and use in source and binary forms, with or without modification, are          #
 -- # permitted provided that the following conditions are met:                                     #
@@ -38,23 +38,22 @@ use ieee.numeric_std.all;
 
 package neorv32_package is
 
+-- ****************************************************************************************************************************
+-- Architecture Configuration and Constants
+-- ****************************************************************************************************************************
+
   -- Architecture Configuration -------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   -- address space --
   constant ispace_base_c : std_ulogic_vector(31 downto 0) := x"00000000"; -- default instruction memory address space base address
   constant dspace_base_c : std_ulogic_vector(31 downto 0) := x"80000000"; -- default data memory address space base address
 
-  -- CPU core --
-  constant dedicated_reset_c : boolean := false; -- use dedicated hardware reset value for UNCRITICAL registers (FALSE=reset value is irrelevant (might simplify HW), default; TRUE=defined LOW reset value)
-  constant cp_timeout_en_c   : boolean := false; -- auto-terminate pending co-processor operations after 256 cycles (for debugging only), default = false
-
-  -- "critical" number of implemented PMP regions --
-  -- if more PMP regions (> pmp_num_regions_critical_c) are defined, another register stage is automatically inserted into the memory interfaces
-  -- increasing instruction fetch & data access latency by +1 cycle but also reducing critical path length
-  constant pmp_num_regions_critical_c : natural := 8; -- default=8
+  -- if register x0 is implemented as a *physical register* it has to be explicitly set to zero by the CPU hardware --
+  constant reset_x0_c : boolean := true; -- has to be 'true' for the default register file rtl description (BRAM-based)
 
   -- "response time window" for processor-internal modules --
-  constant max_proc_int_response_time_c : natural := 15; -- cycles after which an *unacknowledged* internal bus access will timeout and trigger a bus fault exception (min 2)
+  -- = cycles after which an *unacknowledged* internal bus access will timeout and trigger a bus fault exception (min 2)
+  constant max_proc_int_response_time_c : natural := 15;
 
   -- jtag tap - identifier --
   constant jtag_tap_idcode_version_c : std_ulogic_vector(03 downto 0) := x"0"; -- version
@@ -63,9 +62,8 @@ package neorv32_package is
 
   -- Architecture Constants (do not modify!) ------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  constant data_width_c : natural := 32; -- native data path width - do not change!
-  constant hw_version_c : std_ulogic_vector(31 downto 0) := x"01060501"; -- no touchy!
-  constant archid_c     : natural := 19; -- official NEORV32 architecture ID - hands off!
+  constant hw_version_c : std_ulogic_vector(31 downto 0) := x"01070805"; -- NEORV32 version - no touchy!
+  constant archid_c     : natural := 19; -- official RISC-V architecture ID - hands off!
 
   -- Check if we're inside the Matrix -------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
@@ -81,16 +79,19 @@ package neorv32_package is
 -- pragma translate_on
   ;
 
+-- ****************************************************************************************************************************
+-- Custom Types and Functions
+-- ****************************************************************************************************************************
+
   -- External Interface Types ---------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  type sdata_8x32_t  is array (0 to 7)  of std_ulogic_vector(31 downto 0);
-  type sdata_8x32r_t is array (0 to 7)  of std_logic_vector(31 downto 0); -- resolved type
+  type sdata_8x32_t  is array (0 to 7) of std_ulogic_vector(31 downto 0);
+  type sdata_8x32r_t is array (0 to 7) of std_logic_vector(31 downto 0); -- resolved type
 
   -- Internal Interface Types ---------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  type pmp_ctrl_if_t is array (0 to 63) of std_ulogic_vector(07 downto 0);
-  type pmp_addr_if_t is array (0 to 63) of std_ulogic_vector(33 downto 0);
-  type cp_data_if_t  is array (0 to 3)  of std_ulogic_vector(data_width_c-1 downto 0);
+  type pmp_ctrl_if_t is array (0 to 15) of std_ulogic_vector(07 downto 0);
+  type pmp_addr_if_t is array (0 to 15) of std_ulogic_vector(33 downto 0);
 
   -- Internal Memory Types Configuration Types ----------------------------------------------
   -- -------------------------------------------------------------------------------------------
@@ -106,30 +107,30 @@ package neorv32_package is
   function cond_sel_stdulogic_f(cond : boolean; val_t : std_ulogic; val_f : std_ulogic) return std_ulogic;
   function cond_sel_string_f(cond : boolean; val_t : string; val_f : string) return string;
   function bool_to_ulogic_f(cond : boolean) return std_ulogic;
+  function bin_to_gray_f(input : std_ulogic_vector) return std_ulogic_vector;
+  function gray_to_bin_f(input : std_ulogic_vector) return std_ulogic_vector;
   function or_reduce_f(a : std_ulogic_vector) return std_ulogic;
   function and_reduce_f(a : std_ulogic_vector) return std_ulogic;
   function xor_reduce_f(a : std_ulogic_vector) return std_ulogic;
   function to_hexchar_f(input : std_ulogic_vector(3 downto 0)) return character;
+  function to_hstring32_f(input : std_ulogic_vector(31 downto 0)) return string;
   function hexchar_to_stdulogicvector_f(input : character) return std_ulogic_vector;
   function bit_rev_f(input : std_ulogic_vector) return std_ulogic_vector;
   function is_power_of_two_f(input : natural) return boolean;
   function bswap32_f(input : std_ulogic_vector) return std_ulogic_vector;
-  function char_to_lower_f(ch : character) return character;
-  function str_equal_f(str0 : string; str1 : string) return boolean;
   function popcount_f(input : std_ulogic_vector) return natural;
   function leading_zeros_f(input : std_ulogic_vector) return natural;
   impure function mem32_init_f(init : mem32_t; depth : natural) return mem32_t;
 
-  -- Internal (auto-generated) Configurations -----------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  constant def_rst_val_c : std_ulogic;  -- Use a deferred constant, prevents compile error with Questa
-                                        -- See IEEE 1076-2008 14.4.2.1
+-- ****************************************************************************************************************************
+-- Address Space Layout
+-- ****************************************************************************************************************************
 
   -- Processor-Internal Address Space Layout ------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   -- Internal Instruction Memory (IMEM) and Date Memory (DMEM) --
-  constant imem_base_c          : std_ulogic_vector(data_width_c-1 downto 0) := ispace_base_c; -- internal instruction memory base address
-  constant dmem_base_c          : std_ulogic_vector(data_width_c-1 downto 0) := dspace_base_c; -- internal data memory base address
+  constant imem_base_c          : std_ulogic_vector(31 downto 0) := ispace_base_c; -- internal instruction memory base address
+  constant dmem_base_c          : std_ulogic_vector(31 downto 0) := dspace_base_c; -- internal data memory base address
   --> internal data/instruction memory sizes are configured via top's generics
 
   -- !!! IMPORTANT: The base address of each component/module has to be aligned to the !!!
@@ -138,270 +139,220 @@ package neorv32_package is
 
   -- Internal Bootloader ROM --
   -- Actual bootloader size is determined during runtime via the length of the bootloader initialization image
-  constant boot_rom_base_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"ffff0000"; -- bootloader base address, fixed!
+  constant boot_rom_base_c      : std_ulogic_vector(31 downto 0) := x"ffff0000"; -- bootloader base address, fixed!
   constant boot_rom_max_size_c  : natural := 32*1024; -- max module's address space size in bytes, fixed!
 
   -- On-Chip Debugger: Debug Module --
-  constant dm_base_c            : std_ulogic_vector(data_width_c-1 downto 0) := x"fffff800"; -- base address, fixed!
+  constant dm_base_c            : std_ulogic_vector(31 downto 0) := x"fffff800"; -- base address, fixed!
   constant dm_size_c            : natural := 4*32*4; -- debug ROM address space size in bytes, fixed
-  constant dm_code_base_c       : std_ulogic_vector(data_width_c-1 downto 0) := x"fffff800";
-  constant dm_pbuf_base_c       : std_ulogic_vector(data_width_c-1 downto 0) := x"fffff880";
-  constant dm_data_base_c       : std_ulogic_vector(data_width_c-1 downto 0) := x"fffff900";
-  constant dm_sreg_base_c       : std_ulogic_vector(data_width_c-1 downto 0) := x"fffff980";
+  constant dm_code_base_c       : std_ulogic_vector(31 downto 0) := x"fffff800";
+  constant dm_pbuf_base_c       : std_ulogic_vector(31 downto 0) := x"fffff880";
+  constant dm_data_base_c       : std_ulogic_vector(31 downto 0) := x"fffff900";
+  constant dm_sreg_base_c       : std_ulogic_vector(31 downto 0) := x"fffff980";
 
   -- IO: Peripheral Devices ("IO") Area --
-  -- Control register(s) (including the device-enable) should be located at the base address of each device
-  constant io_base_c            : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe00";
+  -- Control register(s) (including the device-enable flag) should be located at the base address of each device
+  constant io_base_c            : std_ulogic_vector(31 downto 0) := x"fffffe00";
   constant io_size_c            : natural := 512; -- IO address space size in bytes, fixed!
 
   -- Custom Functions Subsystem (CFS) --
-  constant cfs_base_c           : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe00"; -- base address
+  constant cfs_base_c           : std_ulogic_vector(31 downto 0) := x"fffffe00"; -- base address
   constant cfs_size_c           : natural := 32*4; -- module's address space in bytes
-  constant cfs_reg0_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe00";
-  constant cfs_reg1_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe04";
-  constant cfs_reg2_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe08";
-  constant cfs_reg3_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe0c";
-  constant cfs_reg4_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe10";
-  constant cfs_reg5_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe14";
-  constant cfs_reg6_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe18";
-  constant cfs_reg7_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe1c";
-  constant cfs_reg8_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe20";
-  constant cfs_reg9_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe24";
-  constant cfs_reg10_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe28";
-  constant cfs_reg11_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe2c";
-  constant cfs_reg12_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe30";
-  constant cfs_reg13_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe34";
-  constant cfs_reg14_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe38";
-  constant cfs_reg15_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe3c";
-  constant cfs_reg16_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe40";
-  constant cfs_reg17_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe44";
-  constant cfs_reg18_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe48";
-  constant cfs_reg19_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe4c";
-  constant cfs_reg20_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe50";
-  constant cfs_reg21_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe54";
-  constant cfs_reg22_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe58";
-  constant cfs_reg23_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe5c";
-  constant cfs_reg24_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe60";
-  constant cfs_reg25_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe64";
-  constant cfs_reg26_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe68";
-  constant cfs_reg27_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe6c";
-  constant cfs_reg28_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe70";
-  constant cfs_reg29_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe74";
-  constant cfs_reg30_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe78";
-  constant cfs_reg31_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe7c";
+  constant cfs_reg0_addr_c      : std_ulogic_vector(31 downto 0) := x"fffffe00";
+  constant cfs_reg1_addr_c      : std_ulogic_vector(31 downto 0) := x"fffffe04";
+  constant cfs_reg2_addr_c      : std_ulogic_vector(31 downto 0) := x"fffffe08";
+  constant cfs_reg3_addr_c      : std_ulogic_vector(31 downto 0) := x"fffffe0c";
+  constant cfs_reg4_addr_c      : std_ulogic_vector(31 downto 0) := x"fffffe10";
+  constant cfs_reg5_addr_c      : std_ulogic_vector(31 downto 0) := x"fffffe14";
+  constant cfs_reg6_addr_c      : std_ulogic_vector(31 downto 0) := x"fffffe18";
+  constant cfs_reg7_addr_c      : std_ulogic_vector(31 downto 0) := x"fffffe1c";
+  constant cfs_reg8_addr_c      : std_ulogic_vector(31 downto 0) := x"fffffe20";
+  constant cfs_reg9_addr_c      : std_ulogic_vector(31 downto 0) := x"fffffe24";
+  constant cfs_reg10_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe28";
+  constant cfs_reg11_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe2c";
+  constant cfs_reg12_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe30";
+  constant cfs_reg13_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe34";
+  constant cfs_reg14_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe38";
+  constant cfs_reg15_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe3c";
+  constant cfs_reg16_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe40";
+  constant cfs_reg17_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe44";
+  constant cfs_reg18_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe48";
+  constant cfs_reg19_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe4c";
+  constant cfs_reg20_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe50";
+  constant cfs_reg21_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe54";
+  constant cfs_reg22_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe58";
+  constant cfs_reg23_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe5c";
+  constant cfs_reg24_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe60";
+  constant cfs_reg25_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe64";
+  constant cfs_reg26_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe68";
+  constant cfs_reg27_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe6c";
+  constant cfs_reg28_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe70";
+  constant cfs_reg29_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe74";
+  constant cfs_reg30_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe78";
+  constant cfs_reg31_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe7c";
 
   -- Pulse-Width Modulation Controller (PWM) --
-  constant pwm_base_c           : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe80"; -- base address
+  constant pwm_base_c           : std_ulogic_vector(31 downto 0) := x"fffffe80"; -- base address
   constant pwm_size_c           : natural := 16*4; -- module's address space size in bytes
-  constant pwm_ctrl_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe80";
-  constant pwm_duty0_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe84";
-  constant pwm_duty1_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe88";
-  constant pwm_duty2_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe8c";
-  constant pwm_duty3_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe90";
-  constant pwm_duty4_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe94";
-  constant pwm_duty5_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe98";
-  constant pwm_duty6_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffe9c";
-  
-  constant pwm_duty7_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffea0";
-  constant pwm_duty8_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffea4";
-  constant pwm_duty9_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffea8";
-  constant pwm_duty10_addr_c    : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffeac";
-  constant pwm_duty11_addr_c    : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffeb0";
-  constant pwm_duty12_addr_c    : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffeb4";
-  constant pwm_duty13_addr_c    : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffeb8";
-  constant pwm_duty14_addr_c    : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffebc";
+  constant pwm_ctrl_addr_c      : std_ulogic_vector(31 downto 0) := x"fffffe80";
+  constant pwm_duty0_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe84";
+  constant pwm_duty1_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe88";
+  constant pwm_duty2_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe8c";
+  constant pwm_duty3_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe90";
+  constant pwm_duty4_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe94";
+  constant pwm_duty5_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe98";
+  constant pwm_duty6_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffe9c";
+  constant pwm_duty7_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffea0";
+  constant pwm_duty8_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffea4";
+  constant pwm_duty9_addr_c     : std_ulogic_vector(31 downto 0) := x"fffffea8";
+  constant pwm_duty10_addr_c    : std_ulogic_vector(31 downto 0) := x"fffffeac";
+  constant pwm_duty11_addr_c    : std_ulogic_vector(31 downto 0) := x"fffffeb0";
+  constant pwm_duty12_addr_c    : std_ulogic_vector(31 downto 0) := x"fffffeb4";
+  constant pwm_duty13_addr_c    : std_ulogic_vector(31 downto 0) := x"fffffeb8";
+  constant pwm_duty14_addr_c    : std_ulogic_vector(31 downto 0) := x"fffffebc";
 
   -- Stream Link Interface (SLINK) --
-  constant slink_base_c         : std_ulogic_vector(data_width_c-1 downto 0) := x"fffffec0"; -- base address
+  constant slink_base_c         : std_ulogic_vector(31 downto 0) := x"fffffec0"; -- base address
   constant slink_size_c         : natural := 16*4; -- module's address space size in bytes
+  constant slink_ctrl_c         : std_ulogic_vector(31 downto 0) := x"fffffec0";
+  constant slink_irq_c          : std_ulogic_vector(31 downto 0) := x"fffffec4";
+  constant slink_rx_status_c    : std_ulogic_vector(31 downto 0) := x"fffffec8";
+  constant slink_tx_status_c    : std_ulogic_vector(31 downto 0) := x"fffffecc";
+--constant slink_reserved_c     : std_ulogic_vector(31 downto 0) := x"fffffed0";
+--constant slink_reserved_c     : std_ulogic_vector(31 downto 0) := x"fffffed4";
+--constant slink_reserved_c     : std_ulogic_vector(31 downto 0) := x"fffffed8";
+--constant slink_reserved_c     : std_ulogic_vector(31 downto 0) := x"fffffedc";
+  constant slink_link0_c        : std_ulogic_vector(31 downto 0) := x"fffffee0";
+  constant slink_link1_c        : std_ulogic_vector(31 downto 0) := x"fffffee4";
+  constant slink_link2_c        : std_ulogic_vector(31 downto 0) := x"fffffee8";
+  constant slink_link3_c        : std_ulogic_vector(31 downto 0) := x"fffffeec";
+  constant slink_link4_c        : std_ulogic_vector(31 downto 0) := x"fffffef0";
+  constant slink_link5_c        : std_ulogic_vector(31 downto 0) := x"fffffef4";
+  constant slink_link6_c        : std_ulogic_vector(31 downto 0) := x"fffffef7";
+  constant slink_link7_c        : std_ulogic_vector(31 downto 0) := x"fffffefc";
 
   -- reserved --
---constant reserved_base_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff00"; -- base address
+--constant reserved_base_c      : std_ulogic_vector(31 downto 0) := x"ffffff00"; -- base address
 --constant reserved_size_c      : natural := 16*4; -- module's address space size in bytes
 
+  -- Execute In Place Module (XIP) --
+  constant xip_base_c           : std_ulogic_vector(31 downto 0) := x"ffffff40"; -- base address
+  constant xip_size_c           : natural := 4*4; -- module's address space size in bytes
+  constant xip_ctrl_addr_c      : std_ulogic_vector(31 downto 0) := x"ffffff40";
+--constant xip_reserved_addr_c  : std_ulogic_vector(31 downto 0) := x"ffffff44";
+  constant xip_data_lo_addr_c   : std_ulogic_vector(31 downto 0) := x"ffffff48";
+  constant xip_data_hi_addr_c   : std_ulogic_vector(31 downto 0) := x"ffffff4C";
+
   -- reserved --
---constant reserved_base_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff40"; -- base address
---constant reserved_size_c      : natural := 8*4; -- module's address space size in bytes
+--constant reserved_base_c      : std_ulogic_vector(31 downto 0) := x"ffffff50"; -- base address
+--constant reserved_size_c      : natural := 4*4; -- module's address space size in bytes
 
   -- General Purpose Timer (GPTMR) --
-  constant gptmr_base_c         : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff60"; -- base address
+  constant gptmr_base_c         : std_ulogic_vector(31 downto 0) := x"ffffff60"; -- base address
   constant gptmr_size_c         : natural := 4*4; -- module's address space size in bytes
-  constant gptmr_ctrl_addr_c    : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff60";
-  constant gptmr_thres_addr_c   : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff64";
-  constant gptmr_count_addr_c   : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff68";
---constant gptmr_reserve_addr_c : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff6c";
+  constant gptmr_ctrl_addr_c    : std_ulogic_vector(31 downto 0) := x"ffffff60";
+  constant gptmr_thres_addr_c   : std_ulogic_vector(31 downto 0) := x"ffffff64";
+  constant gptmr_count_addr_c   : std_ulogic_vector(31 downto 0) := x"ffffff68";
+--constant gptmr_reserve_addr_c : std_ulogic_vector(31 downto 0) := x"ffffff6c";
 
-  -- reserved --
---constant reserved_base_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff70"; -- base address
---constant reserved_size_c      : natural := 2*4; -- module's address space size in bytes
-
-  -- reserved --
---constant reserved_base_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff78"; -- base address
---constant reserved_size_c      : natural := 1*4; -- module's address space size in bytes
+  -- 1-Wire Interface Controller (ONEWIRE) --
+  constant onewire_base_c       : std_ulogic_vector(31 downto 0) := x"ffffff70"; -- base address
+  constant onewire_size_c       : natural := 2*4; -- module's address space size in bytes
+  constant onewire_ctrl_addr_c  : std_ulogic_vector(31 downto 0) := x"ffffff70";
+  constant onewire_data_addr_c  : std_ulogic_vector(31 downto 0) := x"ffffff74";
 
   -- Bus Access Monitor (BUSKEEPER) --
-  constant buskeeper_base_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff7c"; -- base address
-  constant buskeeper_size_c     : natural := 1*4; -- module's address space size in bytes
+  constant buskeeper_base_c     : std_ulogic_vector(31 downto 0) := x"ffffff78"; -- base address
+  constant buskeeper_size_c     : natural := 2*4; -- module's address space size in bytes
 
   -- External Interrupt Controller (XIRQ) --
-  constant xirq_base_c          : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff80"; -- base address
+  constant xirq_base_c          : std_ulogic_vector(31 downto 0) := x"ffffff80"; -- base address
   constant xirq_size_c          : natural := 4*4; -- module's address space size in bytes
-  constant xirq_enable_addr_c   : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff80";
-  constant xirq_pending_addr_c  : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff84";
-  constant xirq_source_addr_c   : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff88";
---constant xirq_reserved_addr_c : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff8c";
+  constant xirq_enable_addr_c   : std_ulogic_vector(31 downto 0) := x"ffffff80";
+  constant xirq_pending_addr_c  : std_ulogic_vector(31 downto 0) := x"ffffff84";
+  constant xirq_source_addr_c   : std_ulogic_vector(31 downto 0) := x"ffffff88";
+--constant xirq_reserved_addr_c : std_ulogic_vector(31 downto 0) := x"ffffff8c";
 
   -- Machine System Timer (MTIME) --
-  constant mtime_base_c         : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff90"; -- base address
+  constant mtime_base_c         : std_ulogic_vector(31 downto 0) := x"ffffff90"; -- base address
   constant mtime_size_c         : natural := 4*4; -- module's address space size in bytes
-  constant mtime_time_lo_addr_c : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff90";
-  constant mtime_time_hi_addr_c : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff94";
-  constant mtime_cmp_lo_addr_c  : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff98";
-  constant mtime_cmp_hi_addr_c  : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffff9c";
+  constant mtime_time_lo_addr_c : std_ulogic_vector(31 downto 0) := x"ffffff90";
+  constant mtime_time_hi_addr_c : std_ulogic_vector(31 downto 0) := x"ffffff94";
+  constant mtime_cmp_lo_addr_c  : std_ulogic_vector(31 downto 0) := x"ffffff98";
+  constant mtime_cmp_hi_addr_c  : std_ulogic_vector(31 downto 0) := x"ffffff9c";
 
   -- Primary Universal Asynchronous Receiver/Transmitter (UART0) --
-  constant uart0_base_c         : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffa0"; -- base address
+  constant uart0_base_c         : std_ulogic_vector(31 downto 0) := x"ffffffa0"; -- base address
   constant uart0_size_c         : natural := 2*4; -- module's address space size in bytes
-  constant uart0_ctrl_addr_c    : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffa0";
-  constant uart0_rtx_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffa4";
+  constant uart0_ctrl_addr_c    : std_ulogic_vector(31 downto 0) := x"ffffffa0";
+  constant uart0_rtx_addr_c     : std_ulogic_vector(31 downto 0) := x"ffffffa4";
 
   -- Serial Peripheral Interface (SPI) --
-  constant spi_base_c           : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffa8"; -- base address
+  constant spi_base_c           : std_ulogic_vector(31 downto 0) := x"ffffffa8"; -- base address
   constant spi_size_c           : natural := 2*4; -- module's address space size in bytes
-  constant spi_ctrl_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffa8";
-  constant spi_rtx_addr_c       : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffac";
+  constant spi_ctrl_addr_c      : std_ulogic_vector(31 downto 0) := x"ffffffa8";
+  constant spi_rtx_addr_c       : std_ulogic_vector(31 downto 0) := x"ffffffac";
 
   -- Two Wire Interface (TWI) --
-  constant twi_base_c           : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffb0"; -- base address
+  constant twi_base_c           : std_ulogic_vector(31 downto 0) := x"ffffffb0"; -- base address
   constant twi_size_c           : natural := 2*4; -- module's address space size in bytes
-  constant twi_ctrl_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffb0";
-  constant twi_rtx_addr_c       : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffb4";
+  constant twi_ctrl_addr_c      : std_ulogic_vector(31 downto 0) := x"ffffffb0";
+  constant twi_rtx_addr_c       : std_ulogic_vector(31 downto 0) := x"ffffffb4";
 
   -- True Random Number Generator (TRNG) --
-  constant trng_base_c          : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffb8"; -- base address
+  constant trng_base_c          : std_ulogic_vector(31 downto 0) := x"ffffffb8"; -- base address
   constant trng_size_c          : natural := 1*4; -- module's address space size in bytes
-  constant trng_ctrl_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffb8";
+  constant trng_ctrl_addr_c     : std_ulogic_vector(31 downto 0) := x"ffffffb8";
 
   -- Watch Dog Timer (WDT) --
-  constant wdt_base_c           : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffbc"; -- base address
+  constant wdt_base_c           : std_ulogic_vector(31 downto 0) := x"ffffffbc"; -- base address
   constant wdt_size_c           : natural := 1*4; -- module's address space size in bytes
-  constant wdt_ctrl_addr_c      : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffbc";
+  constant wdt_ctrl_addr_c      : std_ulogic_vector(31 downto 0) := x"ffffffbc";
 
   -- General Purpose Input/Output Controller (GPIO) --
-  constant gpio_base_c          : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffc0"; -- base address
+  constant gpio_base_c          : std_ulogic_vector(31 downto 0) := x"ffffffc0"; -- base address
   constant gpio_size_c          : natural := 4*4; -- module's address space size in bytes
-  constant gpio_in_lo_addr_c    : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffc0";
-  constant gpio_in_hi_addr_c    : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffc4";
-  constant gpio_out_lo_addr_c   : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffc8";
-  constant gpio_out_hi_addr_c   : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffcc";
+  constant gpio_in_lo_addr_c    : std_ulogic_vector(31 downto 0) := x"ffffffc0";
+  constant gpio_in_hi_addr_c    : std_ulogic_vector(31 downto 0) := x"ffffffc4";
+  constant gpio_out_lo_addr_c   : std_ulogic_vector(31 downto 0) := x"ffffffc8";
+  constant gpio_out_hi_addr_c   : std_ulogic_vector(31 downto 0) := x"ffffffcc";
 
   -- Secondary Universal Asynchronous Receiver/Transmitter (UART1) --
-  constant uart1_base_c         : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffd0"; -- base address
+  constant uart1_base_c         : std_ulogic_vector(31 downto 0) := x"ffffffd0"; -- base address
   constant uart1_size_c         : natural := 2*4; -- module's address space size in bytes
-  constant uart1_ctrl_addr_c    : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffd0";
-  constant uart1_rtx_addr_c     : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffd4";
+  constant uart1_ctrl_addr_c    : std_ulogic_vector(31 downto 0) := x"ffffffd0";
+  constant uart1_rtx_addr_c     : std_ulogic_vector(31 downto 0) := x"ffffffd4";
 
   -- Smart LED (WS2811/WS2812) Interface (NEOLED) --
-  constant neoled_base_c        : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffd8"; -- base address
+  constant neoled_base_c        : std_ulogic_vector(31 downto 0) := x"ffffffd8"; -- base address
   constant neoled_size_c        : natural := 2*4; -- module's address space size in bytes
-  constant neoled_ctrl_addr_c   : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffd8";
-  constant neoled_data_addr_c   : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffdc";
+  constant neoled_ctrl_addr_c   : std_ulogic_vector(31 downto 0) := x"ffffffd8";
+  constant neoled_data_addr_c   : std_ulogic_vector(31 downto 0) := x"ffffffdc";
 
   -- System Information Memory (SYSINFO) --
-  constant sysinfo_base_c       : std_ulogic_vector(data_width_c-1 downto 0) := x"ffffffe0"; -- base address
+  constant sysinfo_base_c       : std_ulogic_vector(31 downto 0) := x"ffffffe0"; -- base address
   constant sysinfo_size_c       : natural := 8*4; -- module's address space size in bytes
 
-  -- Main CPU Control Bus -------------------------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  -- register file --
-  constant ctrl_rf_in_mux_c     : natural :=  0; -- input source select lsb (0=MEM, 1=ALU)
-  constant ctrl_rf_rs1_adr0_c   : natural :=  1; -- source register 1 address bit 0
-  constant ctrl_rf_rs1_adr1_c   : natural :=  2; -- source register 1 address bit 1
-  constant ctrl_rf_rs1_adr2_c   : natural :=  3; -- source register 1 address bit 2
-  constant ctrl_rf_rs1_adr3_c   : natural :=  4; -- source register 1 address bit 3
-  constant ctrl_rf_rs1_adr4_c   : natural :=  5; -- source register 1 address bit 4
-  constant ctrl_rf_rs2_adr0_c   : natural :=  6; -- source register 2 address bit 0
-  constant ctrl_rf_rs2_adr1_c   : natural :=  7; -- source register 2 address bit 1
-  constant ctrl_rf_rs2_adr2_c   : natural :=  8; -- source register 2 address bit 2
-  constant ctrl_rf_rs2_adr3_c   : natural :=  9; -- source register 2 address bit 3
-  constant ctrl_rf_rs2_adr4_c   : natural := 10; -- source register 2 address bit 4
-  constant ctrl_rf_rd_adr0_c    : natural := 11; -- destination register address bit 0
-  constant ctrl_rf_rd_adr1_c    : natural := 12; -- destination register address bit 1
-  constant ctrl_rf_rd_adr2_c    : natural := 13; -- destination register address bit 2
-  constant ctrl_rf_rd_adr3_c    : natural := 14; -- destination register address bit 3
-  constant ctrl_rf_rd_adr4_c    : natural := 15; -- destination register address bit 4
-  constant ctrl_rf_wb_en_c      : natural := 16; -- write back enable
-  -- alu --
-  constant ctrl_alu_op0_c       : natural := 17; -- ALU operation select bit 0
-  constant ctrl_alu_op1_c       : natural := 18; -- ALU operation select bit 1
-  constant ctrl_alu_op2_c       : natural := 19; -- ALU operation select bit 2
-  constant ctrl_alu_func0_c     : natural := 20; -- ALU function select command bit 0
-  constant ctrl_alu_func1_c     : natural := 21; -- ALU function select command bit 1
-  constant ctrl_alu_opa_mux_c   : natural := 22; -- operand A select (0=rs1, 1=PC)
-  constant ctrl_alu_opb_mux_c   : natural := 23; -- operand B select (0=rs2, 1=IMM)
-  constant ctrl_alu_unsigned_c  : natural := 24; -- is unsigned ALU operation
-  constant ctrl_alu_shift_dir_c : natural := 25; -- shift direction (0=left, 1=right)
-  constant ctrl_alu_shift_ar_c  : natural := 26; -- is arithmetic shift
-  constant ctrl_alu_frm0_c      : natural := 27; -- FPU rounding mode bit 0
-  constant ctrl_alu_frm1_c      : natural := 28; -- FPU rounding mode bit 1
-  constant ctrl_alu_frm2_c      : natural := 29; -- FPU rounding mode bit 2
-  -- bus interface --
-  constant ctrl_bus_size_lsb_c  : natural := 30; -- transfer size lsb (00=byte, 01=half-word)
-  constant ctrl_bus_size_msb_c  : natural := 31; -- transfer size msb (10=word, 11=?)
-  constant ctrl_bus_rd_c        : natural := 32; -- read data request
-  constant ctrl_bus_wr_c        : natural := 33; -- write data request
-  constant ctrl_bus_if_c        : natural := 34; -- instruction fetch request
-  constant ctrl_bus_mo_we_c     : natural := 35; -- memory address and data output register write enable
-  constant ctrl_bus_mi_we_c     : natural := 36; -- memory data input register write enable
-  constant ctrl_bus_unsigned_c  : natural := 37; -- is unsigned load
-  constant ctrl_bus_ierr_ack_c  : natural := 38; -- acknowledge instruction fetch bus exceptions
-  constant ctrl_bus_derr_ack_c  : natural := 39; -- acknowledge data access bus exceptions
-  constant ctrl_bus_fence_c     : natural := 40; -- executed fence operation
-  constant ctrl_bus_fencei_c    : natural := 41; -- executed fencei operation
-  constant ctrl_bus_lock_c      : natural := 42; -- make atomic/exclusive access lock
-  constant ctrl_bus_de_lock_c   : natural := 43; -- remove atomic/exclusive access 
-  constant ctrl_bus_ch_lock_c   : natural := 44; -- evaluate atomic/exclusive lock (SC operation)
-  -- co-processors --
-  constant ctrl_cp_id_lsb_c     : natural := 45; -- cp select ID lsb
-  constant ctrl_cp_id_msb_c     : natural := 46; -- cp select ID msb
-  -- instruction's control blocks (used by cpu co-processors) --
-  constant ctrl_ir_funct3_0_c   : natural := 47; -- funct3 bit 0
-  constant ctrl_ir_funct3_1_c   : natural := 48; -- funct3 bit 1
-  constant ctrl_ir_funct3_2_c   : natural := 49; -- funct3 bit 2
-  constant ctrl_ir_funct12_0_c  : natural := 50; -- funct12 bit 0
-  constant ctrl_ir_funct12_1_c  : natural := 51; -- funct12 bit 1
-  constant ctrl_ir_funct12_2_c  : natural := 52; -- funct12 bit 2
-  constant ctrl_ir_funct12_3_c  : natural := 53; -- funct12 bit 3
-  constant ctrl_ir_funct12_4_c  : natural := 54; -- funct12 bit 4
-  constant ctrl_ir_funct12_5_c  : natural := 55; -- funct12 bit 5
-  constant ctrl_ir_funct12_6_c  : natural := 56; -- funct12 bit 6
-  constant ctrl_ir_funct12_7_c  : natural := 57; -- funct12 bit 7
-  constant ctrl_ir_funct12_8_c  : natural := 58; -- funct12 bit 8
-  constant ctrl_ir_funct12_9_c  : natural := 59; -- funct12 bit 9
-  constant ctrl_ir_funct12_10_c : natural := 60; -- funct12 bit 10
-  constant ctrl_ir_funct12_11_c : natural := 61; -- funct12 bit 11
-  constant ctrl_ir_opcode7_0_c  : natural := 62; -- opcode7 bit 0
-  constant ctrl_ir_opcode7_1_c  : natural := 63; -- opcode7 bit 1
-  constant ctrl_ir_opcode7_2_c  : natural := 64; -- opcode7 bit 2
-  constant ctrl_ir_opcode7_3_c  : natural := 65; -- opcode7 bit 3
-  constant ctrl_ir_opcode7_4_c  : natural := 66; -- opcode7 bit 4
-  constant ctrl_ir_opcode7_5_c  : natural := 67; -- opcode7 bit 5
-  constant ctrl_ir_opcode7_6_c  : natural := 68; -- opcode7 bit 6
-  -- CPU status --
-  constant ctrl_priv_lvl_lsb_c  : natural := 69; -- privilege level lsb
-  constant ctrl_priv_lvl_msb_c  : natural := 70; -- privilege level msb
-  constant ctrl_sleep_c         : natural := 71; -- set when CPU is in sleep mode
-  constant ctrl_trap_c          : natural := 72; -- set when CPU is entering trap execution
-  constant ctrl_debug_running_c : natural := 73; -- CPU is in debug mode when set
-  -- control bus size --
-  constant ctrl_width_c         : natural := 74; -- control bus size
+-- ****************************************************************************************************************************
+-- SoC Definitions
+-- ****************************************************************************************************************************
 
-  -- Comparator Bus -------------------------------------------------------------------------
+  -- SoC Clock Generator --------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  constant cmp_equal_c : natural := 0;
-  constant cmp_less_c  : natural := 1; -- for signed and unsigned comparisons
+  constant clk_div2_c    : natural := 0;
+  constant clk_div4_c    : natural := 1;
+  constant clk_div8_c    : natural := 2;
+  constant clk_div64_c   : natural := 3;
+  constant clk_div128_c  : natural := 4;
+  constant clk_div1024_c : natural := 5;
+  constant clk_div2048_c : natural := 6;
+  constant clk_div4096_c : natural := 7;
 
-  -- RISC-V Opcode Layout -------------------------------------------------------------------
+-- ****************************************************************************************************************************
+-- RISC-V ISA Definitions
+-- ****************************************************************************************************************************
+
+  -- RISC-V 32-Bit Instruction Word Layout --------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   constant instr_opcode_lsb_c  : natural :=  0; -- opcode bit 0
   constant instr_opcode_msb_c  : natural :=  6; -- opcode bit 6
@@ -413,6 +364,8 @@ package neorv32_package is
   constant instr_rs1_msb_c     : natural := 19; -- source register 1 address bit 4
   constant instr_rs2_lsb_c     : natural := 20; -- source register 2 address bit 0
   constant instr_rs2_msb_c     : natural := 24; -- source register 2 address bit 4
+  constant instr_rs3_lsb_c     : natural := 27; -- source register 3 address bit 0
+  constant instr_rs3_msb_c     : natural := 31; -- source register 3 address bit 4
   constant instr_funct7_lsb_c  : natural := 25; -- funct7 bit 0
   constant instr_funct7_msb_c  : natural := 31; -- funct7 bit 6
   constant instr_funct12_lsb_c : natural := 20; -- funct12 bit 0
@@ -421,18 +374,16 @@ package neorv32_package is
   constant instr_imm12_msb_c   : natural := 31; -- immediate12 bit 11
   constant instr_imm20_lsb_c   : natural := 12; -- immediate20 bit 0
   constant instr_imm20_msb_c   : natural := 31; -- immediate20 bit 21
-  constant instr_csr_id_lsb_c  : natural := 20; -- csr select bit 0
-  constant instr_csr_id_msb_c  : natural := 31; -- csr select bit 11
   constant instr_funct5_lsb_c  : natural := 27; -- funct5 select bit 0
   constant instr_funct5_msb_c  : natural := 31; -- funct5 select bit 4
 
   -- RISC-V Opcodes -------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   -- alu --
-  constant opcode_lui_c    : std_ulogic_vector(6 downto 0) := "0110111"; -- load upper immediate
-  constant opcode_auipc_c  : std_ulogic_vector(6 downto 0) := "0010111"; -- add upper immediate to PC
   constant opcode_alui_c   : std_ulogic_vector(6 downto 0) := "0010011"; -- ALU operation with immediate (operation via funct3 and funct7)
   constant opcode_alu_c    : std_ulogic_vector(6 downto 0) := "0110011"; -- ALU operation (operation via funct3 and funct7)
+  constant opcode_lui_c    : std_ulogic_vector(6 downto 0) := "0110111"; -- load upper immediate
+  constant opcode_auipc_c  : std_ulogic_vector(6 downto 0) := "0010111"; -- add upper immediate to PC
   -- control flow --
   constant opcode_jal_c    : std_ulogic_vector(6 downto 0) := "1101111"; -- jump and link
   constant opcode_jalr_c   : std_ulogic_vector(6 downto 0) := "1100111"; -- jump and link with register
@@ -440,13 +391,16 @@ package neorv32_package is
   -- memory access --
   constant opcode_load_c   : std_ulogic_vector(6 downto 0) := "0000011"; -- load (data type via funct3)
   constant opcode_store_c  : std_ulogic_vector(6 downto 0) := "0100011"; -- store (data type via funct3)
-  -- system/csr --
+  -- sync/system/csr --
   constant opcode_fence_c  : std_ulogic_vector(6 downto 0) := "0001111"; -- fence / fence.i
-  constant opcode_syscsr_c : std_ulogic_vector(6 downto 0) := "1110011"; -- system/csr access (type via funct3)
-  -- atomic memory access (A) --
-  constant opcode_atomic_c : std_ulogic_vector(6 downto 0) := "0101111"; -- atomic operations (A extension)
-  -- floating point operations (Zfinx-only) (F/D/H/Q) --
+  constant opcode_system_c : std_ulogic_vector(6 downto 0) := "1110011"; -- system/csr access (type via funct3)
+  -- floating point operations --
   constant opcode_fop_c    : std_ulogic_vector(6 downto 0) := "1010011"; -- dual/single operand instruction
+  -- official *custom* RISC-V opcodes - free for custom instructions --
+  constant opcode_cust0_c  : std_ulogic_vector(6 downto 0) := "0001011"; -- custom-0
+  constant opcode_cust1_c  : std_ulogic_vector(6 downto 0) := "0101011"; -- custom-1
+  constant opcode_cust2_c  : std_ulogic_vector(6 downto 0) := "1011011"; -- custom-2
+  constant opcode_cust3_c  : std_ulogic_vector(6 downto 0) := "1111011"; -- custom-3
 
   -- RISC-V Funct3 --------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
@@ -461,11 +415,14 @@ package neorv32_package is
   constant funct3_lb_c     : std_ulogic_vector(2 downto 0) := "000"; -- load byte
   constant funct3_lh_c     : std_ulogic_vector(2 downto 0) := "001"; -- load half word
   constant funct3_lw_c     : std_ulogic_vector(2 downto 0) := "010"; -- load word
+  constant funct3_ld_c     : std_ulogic_vector(2 downto 0) := "011"; -- load half word (unsigned, rv64-only)
   constant funct3_lbu_c    : std_ulogic_vector(2 downto 0) := "100"; -- load byte (unsigned)
   constant funct3_lhu_c    : std_ulogic_vector(2 downto 0) := "101"; -- load half word (unsigned)
+  constant funct3_lwu_c    : std_ulogic_vector(2 downto 0) := "110"; -- load word (unsigned, rv64-only)
   constant funct3_sb_c     : std_ulogic_vector(2 downto 0) := "000"; -- store byte
   constant funct3_sh_c     : std_ulogic_vector(2 downto 0) := "001"; -- store half word
   constant funct3_sw_c     : std_ulogic_vector(2 downto 0) := "010"; -- store word
+  constant funct3_sd_c     : std_ulogic_vector(2 downto 0) := "011"; -- store double-word (rv64-only)
   -- alu --
   constant funct3_subadd_c : std_ulogic_vector(2 downto 0) := "000"; -- sub/add via funct7
   constant funct3_sll_c    : std_ulogic_vector(2 downto 0) := "001"; -- shift logical left
@@ -477,38 +434,32 @@ package neorv32_package is
   constant funct3_and_c    : std_ulogic_vector(2 downto 0) := "111"; -- and
   -- system/csr --
   constant funct3_env_c    : std_ulogic_vector(2 downto 0) := "000"; -- ecall, ebreak, mret, wfi, ...
-  constant funct3_csrrw_c  : std_ulogic_vector(2 downto 0) := "001"; -- atomic r/w
-  constant funct3_csrrs_c  : std_ulogic_vector(2 downto 0) := "010"; -- atomic read & set bit
-  constant funct3_csrrc_c  : std_ulogic_vector(2 downto 0) := "011"; -- atomic read & clear bit
-  constant funct3_csrrwi_c : std_ulogic_vector(2 downto 0) := "101"; -- atomic r/w immediate
-  constant funct3_csrrsi_c : std_ulogic_vector(2 downto 0) := "110"; -- atomic read & set bit immediate
-  constant funct3_csrrci_c : std_ulogic_vector(2 downto 0) := "111"; -- atomic read & clear bit immediate
+  constant funct3_csrrw_c  : std_ulogic_vector(2 downto 0) := "001"; -- csr r/w
+  constant funct3_csrrs_c  : std_ulogic_vector(2 downto 0) := "010"; -- csr read & set bit
+  constant funct3_csrrc_c  : std_ulogic_vector(2 downto 0) := "011"; -- csr read & clear bit
+  constant funct3_csrrwi_c : std_ulogic_vector(2 downto 0) := "101"; -- csr r/w immediate
+  constant funct3_csrrsi_c : std_ulogic_vector(2 downto 0) := "110"; -- csr read & set bit immediate
+  constant funct3_csrrci_c : std_ulogic_vector(2 downto 0) := "111"; -- csr read & clear bit immediate
   -- fence --
-  constant funct3_fence_c  : std_ulogic_vector(2 downto 0) := "000"; -- fence - order IO/memory access (->NOP)
-  constant funct3_fencei_c : std_ulogic_vector(2 downto 0) := "001"; -- fencei - instruction stream sync
+  constant funct3_fence_c  : std_ulogic_vector(2 downto 0) := "000"; -- fence - order IO/memory access
+  constant funct3_fencei_c : std_ulogic_vector(2 downto 0) := "001"; -- fence.i - instruction stream sync
 
   -- RISC-V Funct12 -------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   -- system --
-  constant funct12_ecall_c  : std_ulogic_vector(11 downto 0) := x"000"; -- ECALL
-  constant funct12_ebreak_c : std_ulogic_vector(11 downto 0) := x"001"; -- EBREAK
-  constant funct12_mret_c   : std_ulogic_vector(11 downto 0) := x"302"; -- MRET
-  constant funct12_wfi_c    : std_ulogic_vector(11 downto 0) := x"105"; -- WFI
-  constant funct12_dret_c   : std_ulogic_vector(11 downto 0) := x"7b2"; -- DRET
-
-  -- RISC-V Funct5 --------------------------------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  -- atomic operations --
-  constant funct5_a_lr_c : std_ulogic_vector(4 downto 0) := "00010"; -- LR
-  constant funct5_a_sc_c : std_ulogic_vector(4 downto 0) := "00011"; -- SC
+  constant funct12_ecall_c  : std_ulogic_vector(11 downto 0) := x"000"; -- ecall
+  constant funct12_ebreak_c : std_ulogic_vector(11 downto 0) := x"001"; -- ebreak
+  constant funct12_wfi_c    : std_ulogic_vector(11 downto 0) := x"105"; -- wfi
+  constant funct12_mret_c   : std_ulogic_vector(11 downto 0) := x"302"; -- mret
+  constant funct12_dret_c   : std_ulogic_vector(11 downto 0) := x"7b2"; -- dret
 
   -- RISC-V Floating-Point Stuff ------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   -- formats --
   constant float_single_c : std_ulogic_vector(1 downto 0) := "00"; -- single-precision (32-bit)
-  constant float_double_c : std_ulogic_vector(1 downto 0) := "01"; -- double-precision (64-bit)
-  constant float_half_c   : std_ulogic_vector(1 downto 0) := "10"; -- half-precision (16-bit)
-  constant float_quad_c   : std_ulogic_vector(1 downto 0) := "11"; -- quad-precision (128-bit)
+--constant float_double_c : std_ulogic_vector(1 downto 0) := "01"; -- double-precision (64-bit)
+--constant float_half_c   : std_ulogic_vector(1 downto 0) := "10"; -- half-precision (16-bit)
+--constant float_quad_c   : std_ulogic_vector(1 downto 0) := "11"; -- quad-precision (128-bit)
 
   -- number class flags --
   constant fp_class_neg_inf_c    : natural := 0; -- negative infinity
@@ -539,6 +490,7 @@ package neorv32_package is
 
   -- RISC-V CSR Addresses -------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
+  constant csr_zero_c           : std_ulogic_vector(11 downto 0) := x"000"; -- always returns zero, only relevant for hardware access
   -- <<< standard read/write CSRs >>> --
   -- user floating-point CSRs --
   constant csr_class_float_c    : std_ulogic_vector(09 downto 0) := x"00" & "00"; -- floating point
@@ -555,7 +507,7 @@ package neorv32_package is
   --
   constant csr_mstatush_c       : std_ulogic_vector(11 downto 0) := x"310";
   -- machine configuration --
-  constant csr_class_envcfg_c   : std_ulogic_vector(06 downto 0) := x"3" & "000"; -- configuration
+  constant csr_class_envcfg_c   : std_ulogic_vector(06 downto 0) := x"3" & "000"; -- environment configuration
   constant csr_menvcfg_c        : std_ulogic_vector(11 downto 0) := x"30a";
   constant csr_menvcfgh_c       : std_ulogic_vector(11 downto 0) := x"31a";
   -- machine counter setup --
@@ -598,24 +550,13 @@ package neorv32_package is
   constant csr_mtval_c          : std_ulogic_vector(11 downto 0) := x"343";
   constant csr_mip_c            : std_ulogic_vector(11 downto 0) := x"344";
   -- physical memory protection - configuration --
-  constant csr_class_pmpcfg_c   : std_ulogic_vector(07 downto 0) := x"3a"; -- pmp configuration
+  constant csr_class_pmpcfg_c   : std_ulogic_vector(09 downto 0) := x"3a" & "00"; -- pmp configuration
   constant csr_pmpcfg0_c        : std_ulogic_vector(11 downto 0) := x"3a0";
   constant csr_pmpcfg1_c        : std_ulogic_vector(11 downto 0) := x"3a1";
   constant csr_pmpcfg2_c        : std_ulogic_vector(11 downto 0) := x"3a2";
   constant csr_pmpcfg3_c        : std_ulogic_vector(11 downto 0) := x"3a3";
-  constant csr_pmpcfg4_c        : std_ulogic_vector(11 downto 0) := x"3a4";
-  constant csr_pmpcfg5_c        : std_ulogic_vector(11 downto 0) := x"3a5";
-  constant csr_pmpcfg6_c        : std_ulogic_vector(11 downto 0) := x"3a6";
-  constant csr_pmpcfg7_c        : std_ulogic_vector(11 downto 0) := x"3a7";
-  constant csr_pmpcfg8_c        : std_ulogic_vector(11 downto 0) := x"3a8";
-  constant csr_pmpcfg9_c        : std_ulogic_vector(11 downto 0) := x"3a9";
-  constant csr_pmpcfg10_c       : std_ulogic_vector(11 downto 0) := x"3aa";
-  constant csr_pmpcfg11_c       : std_ulogic_vector(11 downto 0) := x"3ab";
-  constant csr_pmpcfg12_c       : std_ulogic_vector(11 downto 0) := x"3ac";
-  constant csr_pmpcfg13_c       : std_ulogic_vector(11 downto 0) := x"3ad";
-  constant csr_pmpcfg14_c       : std_ulogic_vector(11 downto 0) := x"3ae";
-  constant csr_pmpcfg15_c       : std_ulogic_vector(11 downto 0) := x"3af";
   -- physical memory protection - address --
+  constant csr_class_pmpaddr_c  : std_ulogic_vector(07 downto 0) := x"3b"; -- pmp address
   constant csr_pmpaddr0_c       : std_ulogic_vector(11 downto 0) := x"3b0";
   constant csr_pmpaddr1_c       : std_ulogic_vector(11 downto 0) := x"3b1";
   constant csr_pmpaddr2_c       : std_ulogic_vector(11 downto 0) := x"3b2";
@@ -632,60 +573,23 @@ package neorv32_package is
   constant csr_pmpaddr13_c      : std_ulogic_vector(11 downto 0) := x"3bd";
   constant csr_pmpaddr14_c      : std_ulogic_vector(11 downto 0) := x"3be";
   constant csr_pmpaddr15_c      : std_ulogic_vector(11 downto 0) := x"3bf";
-  constant csr_pmpaddr16_c      : std_ulogic_vector(11 downto 0) := x"3c0";
-  constant csr_pmpaddr17_c      : std_ulogic_vector(11 downto 0) := x"3c1";
-  constant csr_pmpaddr18_c      : std_ulogic_vector(11 downto 0) := x"3c2";
-  constant csr_pmpaddr19_c      : std_ulogic_vector(11 downto 0) := x"3c3";
-  constant csr_pmpaddr20_c      : std_ulogic_vector(11 downto 0) := x"3c4";
-  constant csr_pmpaddr21_c      : std_ulogic_vector(11 downto 0) := x"3c5";
-  constant csr_pmpaddr22_c      : std_ulogic_vector(11 downto 0) := x"3c6";
-  constant csr_pmpaddr23_c      : std_ulogic_vector(11 downto 0) := x"3c7";
-  constant csr_pmpaddr24_c      : std_ulogic_vector(11 downto 0) := x"3c8";
-  constant csr_pmpaddr25_c      : std_ulogic_vector(11 downto 0) := x"3c9";
-  constant csr_pmpaddr26_c      : std_ulogic_vector(11 downto 0) := x"3ca";
-  constant csr_pmpaddr27_c      : std_ulogic_vector(11 downto 0) := x"3cb";
-  constant csr_pmpaddr28_c      : std_ulogic_vector(11 downto 0) := x"3cc";
-  constant csr_pmpaddr29_c      : std_ulogic_vector(11 downto 0) := x"3cd";
-  constant csr_pmpaddr30_c      : std_ulogic_vector(11 downto 0) := x"3ce";
-  constant csr_pmpaddr31_c      : std_ulogic_vector(11 downto 0) := x"3cf";
-  constant csr_pmpaddr32_c      : std_ulogic_vector(11 downto 0) := x"3d0";
-  constant csr_pmpaddr33_c      : std_ulogic_vector(11 downto 0) := x"3d1";
-  constant csr_pmpaddr34_c      : std_ulogic_vector(11 downto 0) := x"3d2";
-  constant csr_pmpaddr35_c      : std_ulogic_vector(11 downto 0) := x"3d3";
-  constant csr_pmpaddr36_c      : std_ulogic_vector(11 downto 0) := x"3d4";
-  constant csr_pmpaddr37_c      : std_ulogic_vector(11 downto 0) := x"3d5";
-  constant csr_pmpaddr38_c      : std_ulogic_vector(11 downto 0) := x"3d6";
-  constant csr_pmpaddr39_c      : std_ulogic_vector(11 downto 0) := x"3d7";
-  constant csr_pmpaddr40_c      : std_ulogic_vector(11 downto 0) := x"3d8";
-  constant csr_pmpaddr41_c      : std_ulogic_vector(11 downto 0) := x"3d9";
-  constant csr_pmpaddr42_c      : std_ulogic_vector(11 downto 0) := x"3da";
-  constant csr_pmpaddr43_c      : std_ulogic_vector(11 downto 0) := x"3db";
-  constant csr_pmpaddr44_c      : std_ulogic_vector(11 downto 0) := x"3dc";
-  constant csr_pmpaddr45_c      : std_ulogic_vector(11 downto 0) := x"3dd";
-  constant csr_pmpaddr46_c      : std_ulogic_vector(11 downto 0) := x"3de";
-  constant csr_pmpaddr47_c      : std_ulogic_vector(11 downto 0) := x"3df";
-  constant csr_pmpaddr48_c      : std_ulogic_vector(11 downto 0) := x"3e0";
-  constant csr_pmpaddr49_c      : std_ulogic_vector(11 downto 0) := x"3e1";
-  constant csr_pmpaddr50_c      : std_ulogic_vector(11 downto 0) := x"3e2";
-  constant csr_pmpaddr51_c      : std_ulogic_vector(11 downto 0) := x"3e3";
-  constant csr_pmpaddr52_c      : std_ulogic_vector(11 downto 0) := x"3e4";
-  constant csr_pmpaddr53_c      : std_ulogic_vector(11 downto 0) := x"3e5";
-  constant csr_pmpaddr54_c      : std_ulogic_vector(11 downto 0) := x"3e6";
-  constant csr_pmpaddr55_c      : std_ulogic_vector(11 downto 0) := x"3e7";
-  constant csr_pmpaddr56_c      : std_ulogic_vector(11 downto 0) := x"3e8";
-  constant csr_pmpaddr57_c      : std_ulogic_vector(11 downto 0) := x"3e9";
-  constant csr_pmpaddr58_c      : std_ulogic_vector(11 downto 0) := x"3ea";
-  constant csr_pmpaddr59_c      : std_ulogic_vector(11 downto 0) := x"3eb";
-  constant csr_pmpaddr60_c      : std_ulogic_vector(11 downto 0) := x"3ec";
-  constant csr_pmpaddr61_c      : std_ulogic_vector(11 downto 0) := x"3ed";
-  constant csr_pmpaddr62_c      : std_ulogic_vector(11 downto 0) := x"3ee";
-  constant csr_pmpaddr63_c      : std_ulogic_vector(11 downto 0) := x"3ef";
+  -- trigger module registers --
+  constant csr_class_trigger_c  : std_ulogic_vector(07 downto 0) := x"7a"; -- trigger registers
+  constant csr_tselect_c        : std_ulogic_vector(11 downto 0) := x"7a0";
+  constant csr_tdata1_c         : std_ulogic_vector(11 downto 0) := x"7a1";
+  constant csr_tdata2_c         : std_ulogic_vector(11 downto 0) := x"7a2";
+  constant csr_tdata3_c         : std_ulogic_vector(11 downto 0) := x"7a3";
+  constant csr_tinfo_c          : std_ulogic_vector(11 downto 0) := x"7a4";
+  constant csr_tcontrol_c       : std_ulogic_vector(11 downto 0) := x"7a5";
+  constant csr_mcontext_c       : std_ulogic_vector(11 downto 0) := x"7a8";
+  constant csr_scontext_c       : std_ulogic_vector(11 downto 0) := x"7aa";
   -- debug mode registers --
   constant csr_class_debug_c    : std_ulogic_vector(09 downto 0) := x"7b" & "00"; -- debug registers
   constant csr_dcsr_c           : std_ulogic_vector(11 downto 0) := x"7b0";
   constant csr_dpc_c            : std_ulogic_vector(11 downto 0) := x"7b1";
   constant csr_dscratch0_c      : std_ulogic_vector(11 downto 0) := x"7b2";
   -- machine counters/timers --
+  constant csr_class_mcnt_c     : std_ulogic_vector(03 downto 0) := x"b"; -- machine-mode counters
   constant csr_mcycle_c         : std_ulogic_vector(11 downto 0) := x"b00";
   constant csr_minstret_c       : std_ulogic_vector(11 downto 0) := x"b02";
   --
@@ -751,51 +655,213 @@ package neorv32_package is
   constant csr_mhpmcounter29h_c : std_ulogic_vector(11 downto 0) := x"b9d";
   constant csr_mhpmcounter30h_c : std_ulogic_vector(11 downto 0) := x"b9e";
   constant csr_mhpmcounter31h_c : std_ulogic_vector(11 downto 0) := x"b9f";
-
   -- <<< standard read-only CSRs >>> --
   -- user counters/timers --
+  constant csr_class_ucnt_c     : std_ulogic_vector(03 downto 0) := x"c"; -- user-mode counters
   constant csr_cycle_c          : std_ulogic_vector(11 downto 0) := x"c00";
   constant csr_time_c           : std_ulogic_vector(11 downto 0) := x"c01";
   constant csr_instret_c        : std_ulogic_vector(11 downto 0) := x"c02";
+  --
+  constant csr_hpmcounter3_c    : std_ulogic_vector(11 downto 0) := x"c03";
+  constant csr_hpmcounter4_c    : std_ulogic_vector(11 downto 0) := x"c04";
+  constant csr_hpmcounter5_c    : std_ulogic_vector(11 downto 0) := x"c05";
+  constant csr_hpmcounter6_c    : std_ulogic_vector(11 downto 0) := x"c06";
+  constant csr_hpmcounter7_c    : std_ulogic_vector(11 downto 0) := x"c07";
+  constant csr_hpmcounter8_c    : std_ulogic_vector(11 downto 0) := x"c08";
+  constant csr_hpmcounter9_c    : std_ulogic_vector(11 downto 0) := x"c09";
+  constant csr_hpmcounter10_c   : std_ulogic_vector(11 downto 0) := x"c0a";
+  constant csr_hpmcounter11_c   : std_ulogic_vector(11 downto 0) := x"c0b";
+  constant csr_hpmcounter12_c   : std_ulogic_vector(11 downto 0) := x"c0c";
+  constant csr_hpmcounter13_c   : std_ulogic_vector(11 downto 0) := x"c0d";
+  constant csr_hpmcounter14_c   : std_ulogic_vector(11 downto 0) := x"c0e";
+  constant csr_hpmcounter15_c   : std_ulogic_vector(11 downto 0) := x"c0f";
+  constant csr_hpmcounter16_c   : std_ulogic_vector(11 downto 0) := x"c10";
+  constant csr_hpmcounter17_c   : std_ulogic_vector(11 downto 0) := x"c11";
+  constant csr_hpmcounter18_c   : std_ulogic_vector(11 downto 0) := x"c12";
+  constant csr_hpmcounter19_c   : std_ulogic_vector(11 downto 0) := x"c13";
+  constant csr_hpmcounter20_c   : std_ulogic_vector(11 downto 0) := x"c14";
+  constant csr_hpmcounter21_c   : std_ulogic_vector(11 downto 0) := x"c15";
+  constant csr_hpmcounter22_c   : std_ulogic_vector(11 downto 0) := x"c16";
+  constant csr_hpmcounter23_c   : std_ulogic_vector(11 downto 0) := x"c17";
+  constant csr_hpmcounter24_c   : std_ulogic_vector(11 downto 0) := x"c18";
+  constant csr_hpmcounter25_c   : std_ulogic_vector(11 downto 0) := x"c19";
+  constant csr_hpmcounter26_c   : std_ulogic_vector(11 downto 0) := x"c1a";
+  constant csr_hpmcounter27_c   : std_ulogic_vector(11 downto 0) := x"c1b";
+  constant csr_hpmcounter28_c   : std_ulogic_vector(11 downto 0) := x"c1c";
+  constant csr_hpmcounter29_c   : std_ulogic_vector(11 downto 0) := x"c1d";
+  constant csr_hpmcounter30_c   : std_ulogic_vector(11 downto 0) := x"c1e";
+  constant csr_hpmcounter31_c   : std_ulogic_vector(11 downto 0) := x"c1f";
+  --
   constant csr_cycleh_c         : std_ulogic_vector(11 downto 0) := x"c80";
   constant csr_timeh_c          : std_ulogic_vector(11 downto 0) := x"c81";
   constant csr_instreth_c       : std_ulogic_vector(11 downto 0) := x"c82";
+  --
+  constant csr_hpmcounter3h_c   : std_ulogic_vector(11 downto 0) := x"c83";
+  constant csr_hpmcounter4h_c   : std_ulogic_vector(11 downto 0) := x"c84";
+  constant csr_hpmcounter5h_c   : std_ulogic_vector(11 downto 0) := x"c85";
+  constant csr_hpmcounter6h_c   : std_ulogic_vector(11 downto 0) := x"c86";
+  constant csr_hpmcounter7h_c   : std_ulogic_vector(11 downto 0) := x"c87";
+  constant csr_hpmcounter8h_c   : std_ulogic_vector(11 downto 0) := x"c88";
+  constant csr_hpmcounter9h_c   : std_ulogic_vector(11 downto 0) := x"c89";
+  constant csr_hpmcounter10h_c  : std_ulogic_vector(11 downto 0) := x"c8a";
+  constant csr_hpmcounter11h_c  : std_ulogic_vector(11 downto 0) := x"c8b";
+  constant csr_hpmcounter12h_c  : std_ulogic_vector(11 downto 0) := x"c8c";
+  constant csr_hpmcounter13h_c  : std_ulogic_vector(11 downto 0) := x"c8d";
+  constant csr_hpmcounter14h_c  : std_ulogic_vector(11 downto 0) := x"c8e";
+  constant csr_hpmcounter15h_c  : std_ulogic_vector(11 downto 0) := x"c8f";
+  constant csr_hpmcounter16h_c  : std_ulogic_vector(11 downto 0) := x"c90";
+  constant csr_hpmcounter17h_c  : std_ulogic_vector(11 downto 0) := x"c91";
+  constant csr_hpmcounter18h_c  : std_ulogic_vector(11 downto 0) := x"c92";
+  constant csr_hpmcounter19h_c  : std_ulogic_vector(11 downto 0) := x"c93";
+  constant csr_hpmcounter20h_c  : std_ulogic_vector(11 downto 0) := x"c94";
+  constant csr_hpmcounter21h_c  : std_ulogic_vector(11 downto 0) := x"c95";
+  constant csr_hpmcounter22h_c  : std_ulogic_vector(11 downto 0) := x"c96";
+  constant csr_hpmcounter23h_c  : std_ulogic_vector(11 downto 0) := x"c97";
+  constant csr_hpmcounter24h_c  : std_ulogic_vector(11 downto 0) := x"c98";
+  constant csr_hpmcounter25h_c  : std_ulogic_vector(11 downto 0) := x"c99";
+  constant csr_hpmcounter26h_c  : std_ulogic_vector(11 downto 0) := x"c9a";
+  constant csr_hpmcounter27h_c  : std_ulogic_vector(11 downto 0) := x"c9b";
+  constant csr_hpmcounter28h_c  : std_ulogic_vector(11 downto 0) := x"c9c";
+  constant csr_hpmcounter29h_c  : std_ulogic_vector(11 downto 0) := x"c9d";
+  constant csr_hpmcounter30h_c  : std_ulogic_vector(11 downto 0) := x"c9e";
+  constant csr_hpmcounter31h_c  : std_ulogic_vector(11 downto 0) := x"c9f";
   -- machine information registers --
   constant csr_mvendorid_c      : std_ulogic_vector(11 downto 0) := x"f11";
   constant csr_marchid_c        : std_ulogic_vector(11 downto 0) := x"f12";
   constant csr_mimpid_c         : std_ulogic_vector(11 downto 0) := x"f13";
   constant csr_mhartid_c        : std_ulogic_vector(11 downto 0) := x"f14";
   constant csr_mconfigptr_c     : std_ulogic_vector(11 downto 0) := x"f15";
+  -- <<< NEORV32-specific (custom) read-only CSRs >>> ---
+  -- machine extended ISA extensions information --
+  constant csr_mxisa_c          : std_ulogic_vector(11 downto 0) := x"fc0";
 
-  -- Co-Processor IDs -----------------------------------------------------------------------
+  -- PMP Modes ------------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  constant cp_sel_shifter_c  : std_ulogic_vector(1 downto 0) := "00"; -- shift operations (base ISA)
-  constant cp_sel_muldiv_c   : std_ulogic_vector(1 downto 0) := "01"; -- multiplication/division operations ('M' extensions)
-  constant cp_sel_bitmanip_c : std_ulogic_vector(1 downto 0) := "10"; -- bit manipulation ('B' extensions)
-  constant cp_sel_fpu_c      : std_ulogic_vector(1 downto 0) := "11"; -- floating-point unit ('Zfinx' extension)
+  constant pmp_mode_off_c   : std_ulogic_vector(1 downto 0) := "00"; -- null region (disabled)
+  constant pmp_mode_tor_c   : std_ulogic_vector(1 downto 0) := "01"; -- top of range
+  constant pmp_mode_na4_c   : std_ulogic_vector(1 downto 0) := "10"; -- naturally aligned four-byte region
+  constant pmp_mode_napot_c : std_ulogic_vector(1 downto 0) := "11"; -- naturally aligned power-of-two region (>= 8 bytes)
 
-  -- ALU Function Codes ---------------------------------------------------------------------
+-- ****************************************************************************************************************************
+-- CPU Control
+-- ****************************************************************************************************************************
+
+  -- Main CPU Control Bus -------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  -- ALU core [DO NOT CHANGE ENCODING!] --
-  constant alu_op_add_c     : std_ulogic_vector(2 downto 0) := "000"; -- alu_result <= A + B
-  constant alu_op_sub_c     : std_ulogic_vector(2 downto 0) := "001"; -- alu_result <= A - B
---constant alu_op_mova_c    : std_ulogic_vector(2 downto 0) := "010"; -- alu_result <= A (rs1)
-  constant alu_op_slt_c     : std_ulogic_vector(2 downto 0) := "011"; -- alu_result <= A < B
-  constant alu_op_movb_c    : std_ulogic_vector(2 downto 0) := "100"; -- alu_result <= B
-  constant alu_op_xor_c     : std_ulogic_vector(2 downto 0) := "101"; -- alu_result <= A xor B
-  constant alu_op_or_c      : std_ulogic_vector(2 downto 0) := "110"; -- alu_result <= A or B
-  constant alu_op_and_c     : std_ulogic_vector(2 downto 0) := "111"; -- alu_result <= A and B
-  -- function select (actual ALU result) --
-  constant alu_func_core_c  : std_ulogic_vector(1 downto 0) := "00"; -- r <= alu_result
-  constant alu_func_nxpc_c  : std_ulogic_vector(1 downto 0) := "01"; -- r <= next_PC
-  constant alu_func_csrr_c  : std_ulogic_vector(1 downto 0) := "10"; -- r <= CSR read
-  constant alu_func_copro_c : std_ulogic_vector(1 downto 0) := "11"; -- r <= CP result (multi-cycle)
+  -- register file --
+  constant ctrl_rf_wb_en_c      : natural :=  0; -- write back enable
+  constant ctrl_rf_rs1_adr0_c   : natural :=  1; -- source register 1 address bit 0
+  constant ctrl_rf_rs1_adr1_c   : natural :=  2; -- source register 1 address bit 1
+  constant ctrl_rf_rs1_adr2_c   : natural :=  3; -- source register 1 address bit 2
+  constant ctrl_rf_rs1_adr3_c   : natural :=  4; -- source register 1 address bit 3
+  constant ctrl_rf_rs1_adr4_c   : natural :=  5; -- source register 1 address bit 4
+  constant ctrl_rf_rs2_adr0_c   : natural :=  6; -- source register 2 address bit 0
+  constant ctrl_rf_rs2_adr1_c   : natural :=  7; -- source register 2 address bit 1
+  constant ctrl_rf_rs2_adr2_c   : natural :=  8; -- source register 2 address bit 2
+  constant ctrl_rf_rs2_adr3_c   : natural :=  9; -- source register 2 address bit 3
+  constant ctrl_rf_rs2_adr4_c   : natural := 10; -- source register 2 address bit 4
+  constant ctrl_rf_rs3_adr0_c   : natural := 11; -- source register 3 address bit 0
+  constant ctrl_rf_rs3_adr1_c   : natural := 12; -- source register 3 address bit 1
+  constant ctrl_rf_rs3_adr2_c   : natural := 13; -- source register 3 address bit 2
+  constant ctrl_rf_rs3_adr3_c   : natural := 14; -- source register 3 address bit 3
+  constant ctrl_rf_rs3_adr4_c   : natural := 15; -- source register 3 address bit 4
+  constant ctrl_rf_rd_adr0_c    : natural := 16; -- destination register address bit 0
+  constant ctrl_rf_rd_adr1_c    : natural := 17; -- destination register address bit 1
+  constant ctrl_rf_rd_adr2_c    : natural := 18; -- destination register address bit 2
+  constant ctrl_rf_rd_adr3_c    : natural := 19; -- destination register address bit 3
+  constant ctrl_rf_rd_adr4_c    : natural := 20; -- destination register address bit 4
+  constant ctrl_rf_mux0_c       : natural := 21; -- input source select lsb
+  constant ctrl_rf_mux1_c       : natural := 22; -- input source select msb
+  constant ctrl_rf_zero_we_c    : natural := 23; -- allow/force write access to x0
+  -- alu --
+  constant ctrl_alu_op0_c       : natural := 24; -- ALU operation select bit 0
+  constant ctrl_alu_op1_c       : natural := 25; -- ALU operation select bit 1
+  constant ctrl_alu_op2_c       : natural := 26; -- ALU operation select bit 2
+  constant ctrl_alu_opa_mux_c   : natural := 27; -- operand A select (0=rs1, 1=PC)
+  constant ctrl_alu_opb_mux_c   : natural := 28; -- operand B select (0=rs2, 1=IMM)
+  constant ctrl_alu_unsigned_c  : natural := 29; -- is unsigned ALU operation
+  constant ctrl_alu_frm0_c      : natural := 30; -- FPU rounding mode bit 0
+  constant ctrl_alu_frm1_c      : natural := 31; -- FPU rounding mode bit 1
+  constant ctrl_alu_frm2_c      : natural := 32; -- FPU rounding mode bit 2
+  -- alu co-processor trigger (one-hot selection) --
+  constant ctrl_cp_trig0_c      : natural := 33; -- trigger CP0
+  constant ctrl_cp_trig1_c      : natural := 34; -- trigger CP1
+  constant ctrl_cp_trig2_c      : natural := 35; -- trigger CP2
+  constant ctrl_cp_trig3_c      : natural := 36; -- trigger CP3
+  constant ctrl_cp_trig4_c      : natural := 37; -- trigger CP4
+  -- bus interface --
+  constant ctrl_bus_req_c       : natural := 38; -- trigger memory request
+  constant ctrl_bus_mo_we_c     : natural := 39; -- memory address and data output register write enable
+  constant ctrl_bus_fence_c     : natural := 40; -- fence operation
+  constant ctrl_bus_fencei_c    : natural := 41; -- fence.i operation
+  constant ctrl_bus_priv_c      : natural := 42; -- effective privilege level for load/store
+  -- instruction word control blocks --
+  constant ctrl_ir_funct3_0_c   : natural := 43; -- funct3 bit 0
+  constant ctrl_ir_funct3_1_c   : natural := 44; -- funct3 bit 1
+  constant ctrl_ir_funct3_2_c   : natural := 45; -- funct3 bit 2
+  constant ctrl_ir_funct12_0_c  : natural := 46; -- funct12 bit 0
+  constant ctrl_ir_funct12_1_c  : natural := 47; -- funct12 bit 1
+  constant ctrl_ir_funct12_2_c  : natural := 48; -- funct12 bit 2
+  constant ctrl_ir_funct12_3_c  : natural := 49; -- funct12 bit 3
+  constant ctrl_ir_funct12_4_c  : natural := 50; -- funct12 bit 4
+  constant ctrl_ir_funct12_5_c  : natural := 51; -- funct12 bit 5
+  constant ctrl_ir_funct12_6_c  : natural := 52; -- funct12 bit 6
+  constant ctrl_ir_funct12_7_c  : natural := 53; -- funct12 bit 7
+  constant ctrl_ir_funct12_8_c  : natural := 54; -- funct12 bit 8
+  constant ctrl_ir_funct12_9_c  : natural := 55; -- funct12 bit 9
+  constant ctrl_ir_funct12_10_c : natural := 56; -- funct12 bit 10
+  constant ctrl_ir_funct12_11_c : natural := 57; -- funct12 bit 11
+  constant ctrl_ir_opcode7_0_c  : natural := 58; -- opcode7 bit 0
+  constant ctrl_ir_opcode7_1_c  : natural := 59; -- opcode7 bit 1
+  constant ctrl_ir_opcode7_2_c  : natural := 60; -- opcode7 bit 2
+  constant ctrl_ir_opcode7_3_c  : natural := 61; -- opcode7 bit 3
+  constant ctrl_ir_opcode7_4_c  : natural := 62; -- opcode7 bit 4
+  constant ctrl_ir_opcode7_5_c  : natural := 63; -- opcode7 bit 5
+  constant ctrl_ir_opcode7_6_c  : natural := 64; -- opcode7 bit 6
+  -- cpu status --
+  constant ctrl_priv_mode_c     : natural := 65; -- effective privilege mode
+  constant ctrl_sleep_c         : natural := 66; -- set when CPU is in sleep mode
+  constant ctrl_trap_c          : natural := 67; -- set when CPU is entering trap execution
+  constant ctrl_debug_running_c : natural := 68; -- set when CPU is in debug mode
+  -- control bus size --
+  constant ctrl_width_c         : natural := 69; -- control bus size
+
+  -- Comparator Bus -------------------------------------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  constant cmp_equal_c : natural := 0;
+  constant cmp_less_c  : natural := 1; -- for signed and unsigned comparisons
+
+  -- CPU Co-Processor IDs -------------------------------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  constant cp_sel_shifter_c  : natural := 0; -- CP0: shift operations (base ISA)
+  constant cp_sel_muldiv_c   : natural := 1; -- CP1: multiplication/division operations ('M' extensions)
+  constant cp_sel_bitmanip_c : natural := 2; -- CP2: bit manipulation ('B' extensions)
+  constant cp_sel_fpu_c      : natural := 3; -- CP3: floating-point unit ('Zfinx' extension)
+  constant cp_sel_cfu_c      : natural := 4; -- CP4: custom instructions CFU ('Zxcfu' extension)
+
+  -- ALU Function Codes [DO NOT CHANGE ENCODING!] -------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  constant alu_op_add_c  : std_ulogic_vector(2 downto 0) := "000"; -- result <= A + B
+  constant alu_op_sub_c  : std_ulogic_vector(2 downto 0) := "001"; -- result <= A - B
+  constant alu_op_cp_c   : std_ulogic_vector(2 downto 0) := "010"; -- result <= co-processor
+  constant alu_op_slt_c  : std_ulogic_vector(2 downto 0) := "011"; -- result <= A < B
+  constant alu_op_movb_c : std_ulogic_vector(2 downto 0) := "100"; -- result <= B
+  constant alu_op_xor_c  : std_ulogic_vector(2 downto 0) := "101"; -- result <= A xor B
+  constant alu_op_or_c   : std_ulogic_vector(2 downto 0) := "110"; -- result <= A or B
+  constant alu_op_and_c  : std_ulogic_vector(2 downto 0) := "111"; -- result <= A and B
+
+  -- Register File Input Select -------------------------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  constant rf_mux_alu_c : std_ulogic_vector(1 downto 0) := "00"; -- register file <= alu result
+  constant rf_mux_mem_c : std_ulogic_vector(1 downto 0) := "01"; -- register file <= memory read data
+  constant rf_mux_csr_c : std_ulogic_vector(1 downto 0) := "10"; -- register file <= CSR read data
+  constant rf_mux_npc_c : std_ulogic_vector(1 downto 0) := "11"; -- register file <= next-PC (for branch-and-link)
 
   -- Trap ID Codes --------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   -- MSB:   1 = async exception (IRQ), 0 = sync exception (e.g. ebreak)
   -- MSB-1: 1 = entry to debug mode, 0 = normal trapping
-  -- RISC-V compliant sync. exceptions --
+  -- RISC-V compliant synchronous exceptions --
   constant trap_ima_c      : std_ulogic_vector(6 downto 0) := "0" & "0" & "00000"; -- 0.0:  instruction misaligned
   constant trap_iba_c      : std_ulogic_vector(6 downto 0) := "0" & "0" & "00001"; -- 0.1:  instruction access fault
   constant trap_iil_c      : std_ulogic_vector(6 downto 0) := "0" & "0" & "00010"; -- 0.2:  illegal instruction
@@ -805,12 +871,20 @@ package neorv32_package is
   constant trap_sma_c      : std_ulogic_vector(6 downto 0) := "0" & "0" & "00110"; -- 0.6:  store address misaligned
   constant trap_sbe_c      : std_ulogic_vector(6 downto 0) := "0" & "0" & "00111"; -- 0.7:  store access fault
   constant trap_uenv_c     : std_ulogic_vector(6 downto 0) := "0" & "0" & "01000"; -- 0.8:  environment call from u-mode
+--constant trap_senv_c     : std_ulogic_vector(6 downto 0) := "0" & "0" & "01001"; -- 0.9:  environment call from s-mode
+--constant trap_henv_c     : std_ulogic_vector(6 downto 0) := "0" & "0" & "01010"; -- 0.10: environment call from h-mode
   constant trap_menv_c     : std_ulogic_vector(6 downto 0) := "0" & "0" & "01011"; -- 0.11: environment call from m-mode
-  -- RISC-V compliant interrupts (async. exceptions) --
+--constant trap_ipf_c      : std_ulogic_vector(6 downto 0) := "0" & "0" & "01100"; -- 0.12: instruction page fault
+--constant trap_lpf_c      : std_ulogic_vector(6 downto 0) := "0" & "0" & "01101"; -- 0.13: load page fault
+--constant trap_???_c      : std_ulogic_vector(6 downto 0) := "0" & "0" & "01110"; -- 0.14: reserved
+--constant trap_spf_c      : std_ulogic_vector(6 downto 0) := "0" & "0" & "01111"; -- 0.15: store page fault
+  -- NEORV32-specific (RISC-V custom) synchronous exceptions --
+-- none implemented yet
+  -- RISC-V compliant asynchronous exceptions (interrupts) --
   constant trap_msi_c      : std_ulogic_vector(6 downto 0) := "1" & "0" & "00011"; -- 1.3:  machine software interrupt
   constant trap_mti_c      : std_ulogic_vector(6 downto 0) := "1" & "0" & "00111"; -- 1.7:  machine timer interrupt
   constant trap_mei_c      : std_ulogic_vector(6 downto 0) := "1" & "0" & "01011"; -- 1.11: machine external interrupt
-  -- NEORV32-specific (custom) interrupts (async. exceptions) --
+  -- NEORV32-specific (RISC-V custom) asynchronous exceptions (interrupts) --
   constant trap_firq0_c    : std_ulogic_vector(6 downto 0) := "1" & "0" & "10000"; -- 1.16: fast interrupt 0
   constant trap_firq1_c    : std_ulogic_vector(6 downto 0) := "1" & "0" & "10001"; -- 1.17: fast interrupt 1
   constant trap_firq2_c    : std_ulogic_vector(6 downto 0) := "1" & "0" & "10010"; -- 1.18: fast interrupt 2
@@ -827,58 +901,60 @@ package neorv32_package is
   constant trap_firq13_c   : std_ulogic_vector(6 downto 0) := "1" & "0" & "11101"; -- 1.29: fast interrupt 13
   constant trap_firq14_c   : std_ulogic_vector(6 downto 0) := "1" & "0" & "11110"; -- 1.30: fast interrupt 14
   constant trap_firq15_c   : std_ulogic_vector(6 downto 0) := "1" & "0" & "11111"; -- 1.31: fast interrupt 15
-  -- entering debug mode - cause --
-  constant trap_db_break_c : std_ulogic_vector(6 downto 0) := "0" & "1" & "00010"; -- break instruction (sync / EXCEPTION)
-  constant trap_db_halt_c  : std_ulogic_vector(6 downto 0) := "1" & "1" & "00011"; -- external halt request (async / IRQ)
-  constant trap_db_step_c  : std_ulogic_vector(6 downto 0) := "1" & "1" & "00100"; -- single-stepping (async / IRQ)
+  -- entering debug mode (sync./async. exceptions) --
+  constant trap_db_break_c : std_ulogic_vector(6 downto 0) := "0" & "1" & "00001"; -- d.0.1: break instruction (sync)
+  constant trap_db_hw_c    : std_ulogic_vector(6 downto 0) := "0" & "1" & "00010"; -- d.0.2: hardware trigger (sync)
+  constant trap_db_halt_c  : std_ulogic_vector(6 downto 0) := "1" & "1" & "00011"; -- d.1.3: external halt request (async)
+  constant trap_db_step_c  : std_ulogic_vector(6 downto 0) := "1" & "1" & "00100"; -- d.1.4: single-stepping (async)
 
-  -- CPU Control Exception System -----------------------------------------------------------
+  -- CPU Trap System ------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   -- exception source bits --
-  constant exception_iaccess_c   : natural :=  0; -- instruction access fault
-  constant exception_iillegal_c  : natural :=  1; -- illegal instruction
-  constant exception_ialign_c    : natural :=  2; -- instruction address misaligned
-  constant exception_m_envcall_c : natural :=  3; -- ENV call from m-mode
-  constant exception_u_envcall_c : natural :=  4; -- ENV call from u-mode
-  constant exception_break_c     : natural :=  5; -- breakpoint
-  constant exception_salign_c    : natural :=  6; -- store address misaligned
-  constant exception_lalign_c    : natural :=  7; -- load address misaligned
-  constant exception_saccess_c   : natural :=  8; -- store access fault
-  constant exception_laccess_c   : natural :=  9; -- load access fault
+  constant exc_iaccess_c   : natural :=  0; -- instruction access fault
+  constant exc_iillegal_c  : natural :=  1; -- illegal instruction
+  constant exc_ialign_c    : natural :=  2; -- instruction address misaligned
+  constant exc_m_envcall_c : natural :=  3; -- ENV call from m-mode
+  constant exc_u_envcall_c : natural :=  4; -- ENV call from u-mode
+  constant exc_break_c     : natural :=  5; -- breakpoint
+  constant exc_salign_c    : natural :=  6; -- store address misaligned
+  constant exc_lalign_c    : natural :=  7; -- load address misaligned
+  constant exc_saccess_c   : natural :=  8; -- store access fault
+  constant exc_laccess_c   : natural :=  9; -- load access fault
   -- for debug mode only --
-  constant exception_db_break_c  : natural := 10; -- enter debug mode via ebreak instruction ("sync EXCEPTION")
+  constant exc_db_break_c  : natural := 10; -- enter debug mode via ebreak instruction ("sync EXCEPTION")
+  constant exc_db_hw_c     : natural := 11; -- enter debug mode via hw trigger ("sync EXCEPTION")
   --
-  constant exception_width_c     : natural := 11; -- length of this list in bits
+  constant exc_width_c     : natural := 12; -- length of this list in bits
   -- interrupt source bits --
-  constant interrupt_msw_irq_c   : natural :=  0; -- machine software interrupt
-  constant interrupt_mtime_irq_c : natural :=  1; -- machine timer interrupt
-  constant interrupt_mext_irq_c  : natural :=  2; -- machine external interrupt
-  constant interrupt_firq_0_c    : natural :=  3; -- fast interrupt channel 0
-  constant interrupt_firq_1_c    : natural :=  4; -- fast interrupt channel 1
-  constant interrupt_firq_2_c    : natural :=  5; -- fast interrupt channel 2
-  constant interrupt_firq_3_c    : natural :=  6; -- fast interrupt channel 3
-  constant interrupt_firq_4_c    : natural :=  7; -- fast interrupt channel 4
-  constant interrupt_firq_5_c    : natural :=  8; -- fast interrupt channel 5
-  constant interrupt_firq_6_c    : natural :=  9; -- fast interrupt channel 6
-  constant interrupt_firq_7_c    : natural := 10; -- fast interrupt channel 7
-  constant interrupt_firq_8_c    : natural := 11; -- fast interrupt channel 8
-  constant interrupt_firq_9_c    : natural := 12; -- fast interrupt channel 9
-  constant interrupt_firq_10_c   : natural := 13; -- fast interrupt channel 10
-  constant interrupt_firq_11_c   : natural := 14; -- fast interrupt channel 11
-  constant interrupt_firq_12_c   : natural := 15; -- fast interrupt channel 12
-  constant interrupt_firq_13_c   : natural := 16; -- fast interrupt channel 13
-  constant interrupt_firq_14_c   : natural := 17; -- fast interrupt channel 14
-  constant interrupt_firq_15_c   : natural := 18; -- fast interrupt channel 15
+  constant irq_msi_irq_c   : natural :=  0; -- machine software interrupt
+  constant irq_mti_irq_c   : natural :=  1; -- machine timer interrupt
+  constant irq_mei_irq_c   : natural :=  2; -- machine external interrupt
+  constant irq_firq_0_c    : natural :=  3; -- fast interrupt channel 0
+  constant irq_firq_1_c    : natural :=  4; -- fast interrupt channel 1
+  constant irq_firq_2_c    : natural :=  5; -- fast interrupt channel 2
+  constant irq_firq_3_c    : natural :=  6; -- fast interrupt channel 3
+  constant irq_firq_4_c    : natural :=  7; -- fast interrupt channel 4
+  constant irq_firq_5_c    : natural :=  8; -- fast interrupt channel 5
+  constant irq_firq_6_c    : natural :=  9; -- fast interrupt channel 6
+  constant irq_firq_7_c    : natural := 10; -- fast interrupt channel 7
+  constant irq_firq_8_c    : natural := 11; -- fast interrupt channel 8
+  constant irq_firq_9_c    : natural := 12; -- fast interrupt channel 9
+  constant irq_firq_10_c   : natural := 13; -- fast interrupt channel 10
+  constant irq_firq_11_c   : natural := 14; -- fast interrupt channel 11
+  constant irq_firq_12_c   : natural := 15; -- fast interrupt channel 12
+  constant irq_firq_13_c   : natural := 16; -- fast interrupt channel 13
+  constant irq_firq_14_c   : natural := 17; -- fast interrupt channel 14
+  constant irq_firq_15_c   : natural := 18; -- fast interrupt channel 15
   -- for debug mode only --
-  constant interrupt_db_halt_c   : natural := 19; -- enter debug mode via external halt request ("async IRQ")
-  constant interrupt_db_step_c   : natural := 20; -- enter debug mode via single-stepping ("async IRQ")
+  constant irq_db_halt_c   : natural := 19; -- enter debug mode via external halt request ("async IRQ")
+  constant irq_db_step_c   : natural := 20; -- enter debug mode via single-stepping ("async IRQ")
   --
-  constant interrupt_width_c     : natural := 21; -- length of this list in bits
+  constant irq_width_c     : natural := 21; -- length of this list in bits
 
   -- CPU Privilege Modes --------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  constant priv_mode_m_c : std_ulogic_vector(1 downto 0) := "11"; -- machine mode
-  constant priv_mode_u_c : std_ulogic_vector(1 downto 0) := "00"; -- user mode
+  constant priv_mode_m_c : std_ulogic := '1'; -- machine mode
+  constant priv_mode_u_c : std_ulogic := '0'; -- user mode
 
   -- HPM Event System -----------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
@@ -900,16 +976,9 @@ package neorv32_package is
   --
   constant hpmcnt_event_size_c    : natural := 15; -- length of this list
 
-  -- Clock Generator ------------------------------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  constant clk_div2_c    : natural := 0;
-  constant clk_div4_c    : natural := 1;
-  constant clk_div8_c    : natural := 2;
-  constant clk_div64_c   : natural := 3;
-  constant clk_div128_c  : natural := 4;
-  constant clk_div1024_c : natural := 5;
-  constant clk_div2048_c : natural := 6;
-  constant clk_div4096_c : natural := 7;
+-- ****************************************************************************************************************************
+-- Entity Definitions
+-- ****************************************************************************************************************************
 
   -- Component: NEORV32 Processor Top Entity ------------------------------------------------
   -- -------------------------------------------------------------------------------------------
@@ -918,11 +987,11 @@ package neorv32_package is
       -- General --
       CLOCK_FREQUENCY              : natural;           -- clock frequency of clk_i in Hz
       HW_THREAD_ID                 : natural := 0;      -- hardware thread id (32-bit)
+      CUSTOM_ID                    : std_ulogic_vector(31 downto 0) := x"00000000"; -- custom user-defined ID
       INT_BOOTLOADER_EN            : boolean := false;  -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
       -- On-Chip Debugger (OCD) --
       ON_CHIP_DEBUGGER_EN          : boolean := false;  -- implement on-chip debugger
       -- RISC-V CPU Extensions --
-      CPU_EXTENSION_RISCV_A        : boolean := false;  -- implement atomic extension?
       CPU_EXTENSION_RISCV_B        : boolean := false;  -- implement bit-manipulation extension?
       CPU_EXTENSION_RISCV_C        : boolean := false;  -- implement compressed extension?
       CPU_EXTENSION_RISCV_E        : boolean := false;  -- implement embedded RF extension?
@@ -934,14 +1003,14 @@ package neorv32_package is
       CPU_EXTENSION_RISCV_Zihpm    : boolean := false;  -- implement hardware performance monitors?
       CPU_EXTENSION_RISCV_Zifencei : boolean := false;  -- implement instruction stream sync.?
       CPU_EXTENSION_RISCV_Zmmul    : boolean := false;  -- implement multiply-only M sub-extension?
-      -- Extension Options --
+      CPU_EXTENSION_RISCV_Zxcfu    : boolean := false;  -- implement custom (instr.) functions unit?
+      -- Tuning Options --
       FAST_MUL_EN                  : boolean := false;  -- use DSPs for M extension's multiplier
       FAST_SHIFT_EN                : boolean := false;  -- use barrel shifter for shift operations
-      CPU_CNT_WIDTH                : natural := 64;     -- total width of CPU cycle and instret counters (0..64)
-      CPU_IPB_ENTRIES              : natural := 2;      -- entries is instruction prefetch buffer, has to be a power of 2
+      CPU_IPB_ENTRIES              : natural := 1;      -- entries in instruction prefetch buffer, has to be a power of 2, min 1
       -- Physical Memory Protection (PMP) --
-      PMP_NUM_REGIONS              : natural := 0;      -- number of regions (0..64)
-      PMP_MIN_GRANULARITY          : natural := 64*1024; -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+      PMP_NUM_REGIONS              : natural := 0;      -- number of regions (0..16)
+      PMP_MIN_GRANULARITY          : natural := 4;      -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
       -- Hardware Performance Monitors (HPM) --
       HPM_NUM_CNTS                 : natural := 0;      -- number of implemented HPM counters (0..29)
       HPM_CNT_WIDTH                : natural := 40;     -- total size of HPM counters (0..64)
@@ -951,7 +1020,7 @@ package neorv32_package is
       -- Internal Data memory (DMEM) --
       MEM_INT_DMEM_EN              : boolean := false;  -- implement processor-internal data memory
       MEM_INT_DMEM_SIZE            : natural := 8*1024; -- size of processor-internal data memory in bytes
-      -- Internal Cache memory (iCACHE) --
+      -- Internal Instruction Cache (iCACHE) --
       ICACHE_EN                    : boolean := false;  -- implement instruction cache
       ICACHE_NUM_BLOCKS            : natural := 4;      -- i-cache: number of blocks (min 1), has to be a power of 2
       ICACHE_BLOCK_SIZE            : natural := 64;     -- i-cache: block size in bytes (min 4), has to be a power of 2
@@ -962,6 +1031,7 @@ package neorv32_package is
       MEM_EXT_PIPE_MODE            : boolean := false;  -- protocol: false=classic/standard wishbone mode, true=pipelined wishbone mode
       MEM_EXT_BIG_ENDIAN           : boolean := false;  -- byte order: true=big-endian, false=little-endian
       MEM_EXT_ASYNC_RX             : boolean := false;  -- use register buffer for RX data when false
+      MEM_EXT_ASYNC_TX             : boolean := false;  -- use register buffer for TX data when false
       -- Stream link interface (SLINK) --
       SLINK_NUM_TX                 : natural := 0;      -- number of TX links (0..8)
       SLINK_NUM_RX                 : natural := 0;      -- number of TX links (0..8)
@@ -981,17 +1051,21 @@ package neorv32_package is
       IO_UART1_RX_FIFO             : natural := 1;      -- RX fifo depth, has to be a power of two, min 1
       IO_UART1_TX_FIFO             : natural := 1;      -- TX fifo depth, has to be a power of two, min 1
       IO_SPI_EN                    : boolean := false;  -- implement serial peripheral interface (SPI)?
+      IO_SPI_FIFO                  : natural := 0;      -- SPI RTX fifo depth, has to be zero or a power of two
       IO_TWI_EN                    : boolean := false;  -- implement two-wire interface (TWI)?
       IO_PWM_NUM_CH                : natural := 0;      -- number of PWM channels to implement (0..60); 0 = disabled
       IO_WDT_EN                    : boolean := false;  -- implement watch dog timer (WDT)?
       IO_TRNG_EN                   : boolean := false;  -- implement true random number generator (TRNG)?
+      IO_TRNG_FIFO                 : natural := 1;      -- TRNG fifo depth, has to be a power of two, min 1
       IO_CFS_EN                    : boolean := false;  -- implement custom functions subsystem (CFS)?
       IO_CFS_CONFIG                : std_ulogic_vector(31 downto 0) := x"00000000"; -- custom CFS configuration generic
       IO_CFS_IN_SIZE               : positive := 32;    -- size of CFS input conduit in bits
       IO_CFS_OUT_SIZE              : positive := 32;    -- size of CFS output conduit in bits
       IO_NEOLED_EN                 : boolean := false;  -- implement NeoPixel-compatible smart LED interface (NEOLED)?
       IO_NEOLED_TX_FIFO            : natural := 1;      -- NEOLED TX FIFO depth, 1..32k, has to be a power of two
-      IO_GPTMR_EN                  : boolean := false   -- implement general purpose timer (GPTMR)?
+      IO_GPTMR_EN                  : boolean := false;  -- implement general purpose timer (GPTMR)?
+      IO_XIP_EN                    : boolean := false;  -- implement execute in place module (XIP)?
+      IO_ONEWIRE_EN                : boolean := false   -- implement 1-wire interface (ONEWIRE)?
     );
     port (
       -- Global control --
@@ -1012,20 +1086,26 @@ package neorv32_package is
       wb_sel_o       : out std_ulogic_vector(03 downto 0); -- byte enable
       wb_stb_o       : out std_ulogic; -- strobe
       wb_cyc_o       : out std_ulogic; -- valid cycle
-      wb_lock_o      : out std_ulogic; -- exclusive access request
       wb_ack_i       : in  std_ulogic := 'L'; -- transfer acknowledge
       wb_err_i       : in  std_ulogic := 'L'; -- transfer error
-      -- Advanced memory control signals (available if MEM_EXT_EN = true) --
+      -- Advanced memory control signals --
       fence_o        : out std_ulogic; -- indicates an executed FENCE operation
       fencei_o       : out std_ulogic; -- indicates an executed FENCEI operation
+      -- XIP (execute in place via SPI) signals (available if IO_XIP_EN = true) --
+      xip_csn_o      : out std_ulogic; -- chip-select, low-active
+      xip_clk_o      : out std_ulogic; -- serial clock
+      xip_sdi_i      : in  std_ulogic := 'L'; -- device data input
+      xip_sdo_o      : out std_ulogic; -- controller data output
       -- TX stream interfaces (available if SLINK_NUM_TX > 0) --
       slink_tx_dat_o : out sdata_8x32_t; -- output data
       slink_tx_val_o : out std_ulogic_vector(7 downto 0); -- valid output
       slink_tx_rdy_i : in  std_ulogic_vector(7 downto 0) := (others => 'L'); -- ready to send
+      slink_tx_lst_o : out std_ulogic_vector(7 downto 0); -- last data of packet
       -- RX stream interfaces (available if SLINK_NUM_RX > 0) --
       slink_rx_dat_i : in  sdata_8x32_t := (others => (others => 'U')); -- input data
       slink_rx_val_i : in  std_ulogic_vector(7 downto 0) := (others => 'L'); -- valid input
       slink_rx_rdy_o : out std_ulogic_vector(7 downto 0); -- ready to receive
+      slink_rx_lst_i : in  std_ulogic_vector(7 downto 0) := (others => 'L'); -- last data of packet
       -- GPIO (available if IO_GPIO_EN = true) --
       gpio_o         : out std_ulogic_vector(63 downto 0); -- parallel output
       gpio_i         : in  std_ulogic_vector(63 downto 0) := (others => 'U'); -- parallel input
@@ -1045,12 +1125,14 @@ package neorv32_package is
       spi_sdi_i      : in  std_ulogic := 'U'; -- controller data in, peripheral data out
       spi_csn_o      : out std_ulogic_vector(07 downto 0); -- SPI CS
       -- TWI (available if IO_TWI_EN = true) --
-      twi_sda_io     : inout std_logic := 'U'; -- twi serial data line
-      twi_scl_io     : inout std_logic := 'U'; -- twi serial clock line
+      twi_sda_io     : inout std_logic; -- twi serial data line
+      twi_scl_io     : inout std_logic; -- twi serial clock line
+      -- 1-Wire Interface (available if IO_ONEWIRE_EN = true) --
+      onewire_io     : inout std_logic; -- 1-wire bus
       -- PWM (available if IO_PWM_NUM_CH > 0) --
       pwm_o          : out std_ulogic_vector(59 downto 0); -- pwm channels
       -- Custom Functions Subsystem IO --
-      cfs_in_i       : in  std_ulogic_vector(IO_CFS_IN_SIZE-1  downto 0) := (others => 'U'); -- custom CFS inputs conduit
+      cfs_in_i       : in  std_ulogic_vector(IO_CFS_IN_SIZE-1 downto 0) := (others => 'U'); -- custom CFS inputs conduit
       cfs_out_o      : out std_ulogic_vector(IO_CFS_OUT_SIZE-1 downto 0); -- custom CFS outputs conduit
       -- NeoPixel-compatible smart LED interface (available if IO_NEOLED_EN = true) --
       neoled_o       : out std_ulogic; -- async serial data line
@@ -1075,7 +1157,6 @@ package neorv32_package is
       CPU_BOOT_ADDR                : std_ulogic_vector(31 downto 0); -- cpu boot address
       CPU_DEBUG_ADDR               : std_ulogic_vector(31 downto 0); -- cpu debug mode start address
       -- RISC-V CPU Extensions --
-      CPU_EXTENSION_RISCV_A        : boolean; -- implement atomic extension?
       CPU_EXTENSION_RISCV_B        : boolean; -- implement bit-manipulation extension?
       CPU_EXTENSION_RISCV_C        : boolean; -- implement compressed extension?
       CPU_EXTENSION_RISCV_E        : boolean; -- implement embedded RF extension?
@@ -1087,59 +1168,54 @@ package neorv32_package is
       CPU_EXTENSION_RISCV_Zihpm    : boolean; -- implement hardware performance monitors?
       CPU_EXTENSION_RISCV_Zifencei : boolean; -- implement instruction stream sync.?
       CPU_EXTENSION_RISCV_Zmmul    : boolean; -- implement multiply-only M sub-extension?
+      CPU_EXTENSION_RISCV_Zxcfu    : boolean; -- implement custom (instr.) functions unit?
       CPU_EXTENSION_RISCV_DEBUG    : boolean; -- implement CPU debug mode?
-      -- Extension Options --
+      -- Tuning Options --
       FAST_MUL_EN                  : boolean; -- use DSPs for M extension's multiplier
       FAST_SHIFT_EN                : boolean; -- use barrel shifter for shift operations
-      CPU_CNT_WIDTH                : natural; -- total width of CPU cycle and instret counters (0..64)
-      CPU_IPB_ENTRIES              : natural; -- entries is instruction prefetch buffer, has to be a power of 2
+      CPU_IPB_ENTRIES              : natural; -- entries in instruction prefetch buffer, has to be a power of 2, min 1
       -- Physical Memory Protection (PMP) --
-      PMP_NUM_REGIONS              : natural; -- number of regions (0..64)
-      PMP_MIN_GRANULARITY          : natural; -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+      PMP_NUM_REGIONS              : natural; -- number of regions (0..16)
+      PMP_MIN_GRANULARITY          : natural; -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
       -- Hardware Performance Monitors (HPM) --
       HPM_NUM_CNTS                 : natural; -- number of implemented HPM counters (0..29)
       HPM_CNT_WIDTH                : natural  -- total size of HPM counters (0..64)
     );
     port (
       -- global control --
-      clk_i          : in  std_ulogic; -- global clock, rising edge
-      rstn_i         : in  std_ulogic; -- global reset, low-active, async
-      sleep_o        : out std_ulogic; -- cpu is in sleep mode when set
-      debug_o        : out std_ulogic; -- cpu is in debug mode when set
+      clk_i         : in  std_ulogic; -- global clock, rising edge
+      rstn_i        : in  std_ulogic; -- global reset, low-active, async
+      sleep_o       : out std_ulogic; -- cpu is in sleep mode when set
+      debug_o       : out std_ulogic; -- cpu is in debug mode when set
       -- instruction bus interface --
-      i_bus_addr_o   : out std_ulogic_vector(data_width_c-1 downto 0); -- bus access address
-      i_bus_rdata_i  : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus read data
-      i_bus_wdata_o  : out std_ulogic_vector(data_width_c-1 downto 0); -- bus write data
-      i_bus_ben_o    : out std_ulogic_vector(03 downto 0); -- byte enable
-      i_bus_we_o     : out std_ulogic; -- write enable
-      i_bus_re_o     : out std_ulogic; -- read enable
-      i_bus_lock_o   : out std_ulogic; -- exclusive access request
-      i_bus_ack_i    : in  std_ulogic; -- bus transfer acknowledge
-      i_bus_err_i    : in  std_ulogic; -- bus transfer error
-      i_bus_fence_o  : out std_ulogic; -- executed FENCEI operation
-      i_bus_priv_o   : out std_ulogic_vector(1 downto 0); -- privilege level
+      i_bus_addr_o  : out std_ulogic_vector(31 downto 0); -- bus access address
+      i_bus_rdata_i : in  std_ulogic_vector(31 downto 0); -- bus read data
+      i_bus_re_o    : out std_ulogic; -- read request
+      i_bus_ack_i   : in  std_ulogic; -- bus transfer acknowledge
+      i_bus_err_i   : in  std_ulogic; -- bus transfer error
+      i_bus_fence_o : out std_ulogic; -- executed FENCEI operation
+      i_bus_priv_o  : out std_ulogic; -- current effective privilege level
       -- data bus interface --
-      d_bus_addr_o   : out std_ulogic_vector(data_width_c-1 downto 0); -- bus access address
-      d_bus_rdata_i  : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus read data
-      d_bus_wdata_o  : out std_ulogic_vector(data_width_c-1 downto 0); -- bus write data
-      d_bus_ben_o    : out std_ulogic_vector(03 downto 0); -- byte enable
-      d_bus_we_o     : out std_ulogic; -- write enable
-      d_bus_re_o     : out std_ulogic; -- read enable
-      d_bus_lock_o   : out std_ulogic; -- exclusive access request
-      d_bus_ack_i    : in  std_ulogic; -- bus transfer acknowledge
-      d_bus_err_i    : in  std_ulogic; -- bus transfer error
-      d_bus_fence_o  : out std_ulogic; -- executed FENCE operation
-      d_bus_priv_o   : out std_ulogic_vector(1 downto 0); -- privilege level
+      d_bus_addr_o  : out std_ulogic_vector(31 downto 0); -- bus access address
+      d_bus_rdata_i : in  std_ulogic_vector(31 downto 0); -- bus read data
+      d_bus_wdata_o : out std_ulogic_vector(31 downto 0); -- bus write data
+      d_bus_ben_o   : out std_ulogic_vector(3 downto 0); -- byte enable
+      d_bus_we_o    : out std_ulogic; -- write request
+      d_bus_re_o    : out std_ulogic; -- read request
+      d_bus_ack_i   : in  std_ulogic; -- bus transfer acknowledge
+      d_bus_err_i   : in  std_ulogic; -- bus transfer error
+      d_bus_fence_o : out std_ulogic; -- executed FENCE operation
+      d_bus_priv_o  : out std_ulogic; -- current effective privilege level
       -- system time input from MTIME --
-      time_i         : in  std_ulogic_vector(63 downto 0); -- current system time
+      time_i        : in  std_ulogic_vector(63 downto 0); -- current system time
       -- interrupts (risc-v compliant) --
-      msw_irq_i      : in  std_ulogic; -- machine software interrupt
-      mext_irq_i     : in  std_ulogic; -- machine external interrupt
-      mtime_irq_i    : in  std_ulogic; -- machine timer interrupt
+      msw_irq_i     : in  std_ulogic; -- machine software interrupt
+      mext_irq_i    : in  std_ulogic; -- machine external interrupt
+      mtime_irq_i   : in  std_ulogic; -- machine timer interrupt
       -- fast interrupts (custom) --
-      firq_i         : in  std_ulogic_vector(15 downto 0);
+      firq_i        : in  std_ulogic_vector(15 downto 0);
       -- debug mode (halt) request --
-      db_halt_req_i  : in  std_ulogic
+      db_halt_req_i : in  std_ulogic
     );
   end component;
 
@@ -1148,11 +1224,11 @@ package neorv32_package is
   component neorv32_cpu_control
     generic (
       -- General --
-      HW_THREAD_ID                 : natural;     -- hardware thread id (32-bit)
+      XLEN                         : natural; -- data path width
+      HW_THREAD_ID                 : natural; -- hardware thread id (32-bit)
       CPU_BOOT_ADDR                : std_ulogic_vector(31 downto 0); -- cpu boot address
       CPU_DEBUG_ADDR               : std_ulogic_vector(31 downto 0); -- cpu debug mode start address
       -- RISC-V CPU Extensions --
-      CPU_EXTENSION_RISCV_A        : boolean; -- implement atomic extension?
       CPU_EXTENSION_RISCV_B        : boolean; -- implement bit-manipulation extension?
       CPU_EXTENSION_RISCV_C        : boolean; -- implement compressed extension?
       CPU_EXTENSION_RISCV_E        : boolean; -- implement embedded RF extension?
@@ -1164,13 +1240,15 @@ package neorv32_package is
       CPU_EXTENSION_RISCV_Zihpm    : boolean; -- implement hardware performance monitors?
       CPU_EXTENSION_RISCV_Zifencei : boolean; -- implement instruction stream sync.?
       CPU_EXTENSION_RISCV_Zmmul    : boolean; -- implement multiply-only M sub-extension?
+      CPU_EXTENSION_RISCV_Zxcfu    : boolean; -- implement custom (instr.) functions unit?
       CPU_EXTENSION_RISCV_DEBUG    : boolean; -- implement CPU debug mode?
       -- Extension Options --
-      CPU_CNT_WIDTH                : natural; -- total width of CPU cycle and instret counters (0..64)
-      CPU_IPB_ENTRIES              : natural; -- entries is instruction prefetch buffer, has to be a power of 2
+      FAST_MUL_EN                  : boolean; -- use DSPs for M extension's multiplier
+      FAST_SHIFT_EN                : boolean; -- use barrel shifter for shift operations
+      CPU_IPB_ENTRIES              : natural; -- entries is instruction prefetch buffer, has to be a power of 2, min 1
       -- Physical memory protection (PMP) --
-      PMP_NUM_REGIONS              : natural; -- number of regions (0..64)
-      PMP_MIN_GRANULARITY          : natural; -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+      PMP_NUM_REGIONS              : natural; -- number of regions (0..16)
+      PMP_MIN_GRANULARITY          : natural; -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
       -- Hardware Performance Monitors (HPM) --
       HPM_NUM_CNTS                 : natural; -- number of implemented HPM counters (0..29)
       HPM_CNT_WIDTH                : natural  -- total size of HPM counters (0..64)
@@ -1180,24 +1258,27 @@ package neorv32_package is
       clk_i         : in  std_ulogic; -- global clock, rising edge
       rstn_i        : in  std_ulogic; -- global reset, low-active, async
       ctrl_o        : out std_ulogic_vector(ctrl_width_c-1 downto 0); -- main control bus
+      -- instruction fetch interface --
+      i_bus_addr_o  : out std_ulogic_vector(XLEN-1 downto 0); -- bus access address
+      i_bus_rdata_i : in  std_ulogic_vector(XLEN-1 downto 0); -- bus read data
+      i_bus_re_o    : out std_ulogic; -- read enable
+      i_bus_ack_i   : in  std_ulogic; -- bus transfer acknowledge
+      i_bus_err_i   : in  std_ulogic; -- bus transfer error
+      i_pmp_fault_i : in  std_ulogic; -- instruction fetch pmp fault
       -- status input --
       alu_idone_i   : in  std_ulogic; -- ALU iterative operation done
-      bus_i_wait_i  : in  std_ulogic; -- wait for bus
       bus_d_wait_i  : in  std_ulogic; -- wait for bus
-      excl_state_i  : in  std_ulogic; -- atomic/exclusive access lock status
       -- data input --
-      instr_i       : in  std_ulogic_vector(data_width_c-1 downto 0); -- instruction
       cmp_i         : in  std_ulogic_vector(1 downto 0); -- comparator status
-      alu_add_i     : in  std_ulogic_vector(data_width_c-1 downto 0); -- ALU address result
-      rs1_i         : in  std_ulogic_vector(data_width_c-1 downto 0); -- rf source 1
+      alu_add_i     : in  std_ulogic_vector(XLEN-1 downto 0); -- ALU address result
+      rs1_i         : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 1
       -- data output --
-      imm_o         : out std_ulogic_vector(data_width_c-1 downto 0); -- immediate
-      fetch_pc_o    : out std_ulogic_vector(data_width_c-1 downto 0); -- PC for instruction fetch
-      curr_pc_o     : out std_ulogic_vector(data_width_c-1 downto 0); -- current PC (corresponding to current instruction)
-      next_pc_o     : out std_ulogic_vector(data_width_c-1 downto 0); -- next PC (corresponding to next instruction)
-      csr_rdata_o   : out std_ulogic_vector(data_width_c-1 downto 0); -- CSR read data
+      imm_o         : out std_ulogic_vector(XLEN-1 downto 0); -- immediate
+      curr_pc_o     : out std_ulogic_vector(XLEN-1 downto 0); -- current PC (corresponding to current instruction)
+      next_pc_o     : out std_ulogic_vector(XLEN-1 downto 0); -- next PC (corresponding to next instruction)
+      csr_rdata_o   : out std_ulogic_vector(XLEN-1 downto 0); -- CSR read data
       -- FPU interface --
-      fpu_flags_i   : in  std_ulogic_vector(04 downto 0); -- exception flags
+      fpu_flags_i   : in  std_ulogic_vector(4 downto 0); -- exception flags
       -- debug mode (halt) request --
       db_halt_req_i : in  std_ulogic;
       -- interrupts (risc-v compliant) --
@@ -1212,11 +1293,9 @@ package neorv32_package is
       pmp_addr_o    : out pmp_addr_if_t; -- addresses
       pmp_ctrl_o    : out pmp_ctrl_if_t; -- configs
       -- bus access exceptions --
-      mar_i         : in  std_ulogic_vector(data_width_c-1 downto 0); -- memory address register
-      ma_instr_i    : in  std_ulogic; -- misaligned instruction address
+      mar_i         : in  std_ulogic_vector(XLEN-1 downto 0); -- memory address register
       ma_load_i     : in  std_ulogic; -- misaligned load data address
       ma_store_i    : in  std_ulogic; -- misaligned store data address
-      be_instr_i    : in  std_ulogic; -- bus error on instruction access
       be_load_i     : in  std_ulogic; -- bus error on load data access
       be_store_i    : in  std_ulogic  -- bus error on store data access
     );
@@ -1226,18 +1305,25 @@ package neorv32_package is
   -- -------------------------------------------------------------------------------------------
   component neorv32_cpu_regfile
     generic (
-      CPU_EXTENSION_RISCV_E : boolean -- implement embedded RF extension?
+      XLEN                  : natural; -- data path width
+      CPU_EXTENSION_RISCV_E : boolean; -- implement embedded RF extension?
+      RS3_EN                : boolean; -- enable 3rd read port
+      RS4_EN                : boolean  -- enable 4th read port
     );
     port (
       -- global control --
       clk_i  : in  std_ulogic; -- global clock, rising edge
       ctrl_i : in  std_ulogic_vector(ctrl_width_c-1 downto 0); -- main control bus
       -- data input --
-      mem_i  : in  std_ulogic_vector(data_width_c-1 downto 0); -- memory read data
-      alu_i  : in  std_ulogic_vector(data_width_c-1 downto 0); -- ALU result
+      alu_i  : in  std_ulogic_vector(XLEN-1 downto 0); -- ALU result
+      mem_i  : in  std_ulogic_vector(XLEN-1 downto 0); -- memory read data
+      csr_i  : in  std_ulogic_vector(XLEN-1 downto 0); -- CSR read data
+      pc2_i  : in  std_ulogic_vector(XLEN-1 downto 0); -- next PC
       -- data output --
-      rs1_o  : out std_ulogic_vector(data_width_c-1 downto 0); -- operand 1
-      rs2_o  : out std_ulogic_vector(data_width_c-1 downto 0)  -- operand 2
+      rs1_o  : out std_ulogic_vector(XLEN-1 downto 0); -- operand 1
+      rs2_o  : out std_ulogic_vector(XLEN-1 downto 0); -- operand 2
+      rs3_o  : out std_ulogic_vector(XLEN-1 downto 0); -- operand 3
+      rs4_o  : out std_ulogic_vector(XLEN-1 downto 0)  -- operand 4
     );
   end component;
 
@@ -1245,11 +1331,13 @@ package neorv32_package is
   -- -------------------------------------------------------------------------------------------
   component neorv32_cpu_alu
     generic (
+      XLEN                      : natural; -- data path width
       -- RISC-V CPU Extensions --
       CPU_EXTENSION_RISCV_B     : boolean; -- implement bit-manipulation extension?
       CPU_EXTENSION_RISCV_M     : boolean; -- implement mul/div extension?
       CPU_EXTENSION_RISCV_Zmmul : boolean; -- implement multiply-only M sub-extension?
       CPU_EXTENSION_RISCV_Zfinx : boolean; -- implement 32-bit floating-point extension (using INT reg!)
+      CPU_EXTENSION_RISCV_Zxcfu : boolean; -- implement custom (instr.) functions unit?
       -- Extension Options --
       FAST_MUL_EN               : boolean; -- use DSPs for M extension's multiplier
       FAST_SHIFT_EN             : boolean  -- use barrel shifter for shift operations
@@ -1260,16 +1348,16 @@ package neorv32_package is
       rstn_i      : in  std_ulogic; -- global reset, low-active, async
       ctrl_i      : in  std_ulogic_vector(ctrl_width_c-1 downto 0); -- main control bus
       -- data input --
-      rs1_i       : in  std_ulogic_vector(data_width_c-1 downto 0); -- rf source 1
-      rs2_i       : in  std_ulogic_vector(data_width_c-1 downto 0); -- rf source 2
-      pc_i        : in  std_ulogic_vector(data_width_c-1 downto 0); -- current PC
-      pc2_i       : in  std_ulogic_vector(data_width_c-1 downto 0); -- next PC
-      imm_i       : in  std_ulogic_vector(data_width_c-1 downto 0); -- immediate
-      csr_i       : in  std_ulogic_vector(data_width_c-1 downto 0); -- CSR read data
+      rs1_i       : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 1
+      rs2_i       : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 2
+      rs3_i       : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 3
+      rs4_i       : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 4
+      pc_i        : in  std_ulogic_vector(XLEN-1 downto 0); -- current PC
+      imm_i       : in  std_ulogic_vector(XLEN-1 downto 0); -- immediate
       -- data output --
       cmp_o       : out std_ulogic_vector(1 downto 0); -- comparator status
-      res_o       : out std_ulogic_vector(data_width_c-1 downto 0); -- ALU result
-      add_o       : out std_ulogic_vector(data_width_c-1 downto 0); -- address computation result
+      res_o       : out std_ulogic_vector(XLEN-1 downto 0); -- ALU result
+      add_o       : out std_ulogic_vector(XLEN-1 downto 0); -- address computation result
       fpu_flags_o : out std_ulogic_vector(4 downto 0); -- FPU exception flags
       -- status --
       idone_o     : out std_ulogic -- iterative processing units done?
@@ -1280,7 +1368,8 @@ package neorv32_package is
   -- -------------------------------------------------------------------------------------------
   component neorv32_cpu_cp_shifter
     generic (
-      FAST_SHIFT_EN : boolean -- use barrel shifter for shift operations
+      XLEN          : natural; -- data path width
+      FAST_SHIFT_EN : boolean  -- use barrel shifter for shift operations
     );
     port (
       -- global control --
@@ -1289,10 +1378,10 @@ package neorv32_package is
       ctrl_i  : in  std_ulogic_vector(ctrl_width_c-1 downto 0); -- main control bus
       start_i : in  std_ulogic; -- trigger operation
       -- data input --
-      rs1_i   : in  std_ulogic_vector(data_width_c-1 downto 0); -- rf source 1
-      shamt_i : in  std_ulogic_vector(index_size_f(data_width_c)-1 downto 0); -- shift amount
+      rs1_i   : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 1
+      shamt_i : in  std_ulogic_vector(index_size_f(XLEN)-1 downto 0); -- shift amount
       -- result and status --
-      res_o   : out std_ulogic_vector(data_width_c-1 downto 0); -- operation result
+      res_o   : out std_ulogic_vector(XLEN-1 downto 0); -- operation result
       valid_o : out std_ulogic -- data output valid
     );
   end component;
@@ -1301,6 +1390,7 @@ package neorv32_package is
   -- -------------------------------------------------------------------------------------------
   component neorv32_cpu_cp_muldiv
     generic (
+      XLEN        : natural; -- data path width
       FAST_MUL_EN : boolean; -- use DSPs for faster multiplication
       DIVISION_EN : boolean  -- implement divider hardware
     );
@@ -1311,10 +1401,10 @@ package neorv32_package is
       ctrl_i  : in  std_ulogic_vector(ctrl_width_c-1 downto 0); -- main control bus
       start_i : in  std_ulogic; -- trigger operation
       -- data input --
-      rs1_i   : in  std_ulogic_vector(data_width_c-1 downto 0); -- rf source 1
-      rs2_i   : in  std_ulogic_vector(data_width_c-1 downto 0); -- rf source 2
+      rs1_i   : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 1
+      rs2_i   : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 2
       -- result and status --
-      res_o   : out std_ulogic_vector(data_width_c-1 downto 0); -- operation result
+      res_o   : out std_ulogic_vector(XLEN-1 downto 0); -- operation result
       valid_o : out std_ulogic -- data output valid
     );
   end component;
@@ -1323,6 +1413,7 @@ package neorv32_package is
   -- -------------------------------------------------------------------------------------------
   component neorv32_cpu_cp_bitmanip is
     generic (
+      XLEN          : natural; -- data path width
       FAST_SHIFT_EN : boolean  -- use barrel shifter for shift operations
     );
     port (
@@ -1333,11 +1424,11 @@ package neorv32_package is
       start_i : in  std_ulogic; -- trigger operation
       -- data input --
       cmp_i   : in  std_ulogic_vector(1 downto 0); -- comparator status
-      rs1_i   : in  std_ulogic_vector(data_width_c-1 downto 0); -- rf source 1
-      rs2_i   : in  std_ulogic_vector(data_width_c-1 downto 0); -- rf source 2
-      shamt_i : in  std_ulogic_vector(index_size_f(data_width_c)-1 downto 0); -- shift amount
+      rs1_i   : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 1
+      rs2_i   : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 2
+      shamt_i : in  std_ulogic_vector(index_size_f(XLEN)-1 downto 0); -- shift amount
       -- result and status --
-      res_o   : out std_ulogic_vector(data_width_c-1 downto 0); -- operation result
+      res_o   : out std_ulogic_vector(XLEN-1 downto 0); -- operation result
       valid_o : out std_ulogic -- data output valid
     );
   end component;
@@ -1345,6 +1436,9 @@ package neorv32_package is
   -- Component: CPU Co-Processor 32-bit FPU ('Zfinx' extension) -----------------------------
   -- -------------------------------------------------------------------------------------------
   component neorv32_cpu_cp_fpu
+    generic (
+      XLEN : natural -- data path width
+    );
     port (
       -- global control --
       clk_i    : in  std_ulogic; -- global clock, rising edge
@@ -1353,12 +1447,36 @@ package neorv32_package is
       start_i  : in  std_ulogic; -- trigger operation
       -- data input --
       cmp_i    : in  std_ulogic_vector(1 downto 0); -- comparator status
-      rs1_i    : in  std_ulogic_vector(data_width_c-1 downto 0); -- rf source 1
-      rs2_i    : in  std_ulogic_vector(data_width_c-1 downto 0); -- rf source 2
+      rs1_i    : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 1
+      rs2_i    : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 2
+      rs3_i    : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 3
       -- result and status --
-      res_o    : out std_ulogic_vector(data_width_c-1 downto 0); -- operation result
+      res_o    : out std_ulogic_vector(XLEN-1 downto 0); -- operation result
       fflags_o : out std_ulogic_vector(4 downto 0); -- exception flags
       valid_o  : out std_ulogic -- data output valid
+    );
+  end component;
+
+  -- Component: CPU Co-Processor Custom (Instr.) Functions Unit ('Zxcfu' extension) ---------
+  -- -------------------------------------------------------------------------------------------
+  component neorv32_cpu_cp_cfu
+    generic (
+      XLEN : natural -- data path width
+    );
+    port (
+      -- global control --
+      clk_i   : in  std_ulogic; -- global clock, rising edge
+      rstn_i  : in  std_ulogic; -- global reset, low-active, async
+      ctrl_i  : in  std_ulogic_vector(ctrl_width_c-1 downto 0); -- main control bus
+      start_i : in  std_ulogic; -- trigger operation
+      -- data input --
+      rs1_i   : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 1
+      rs2_i   : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 2
+      rs3_i   : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 3
+      rs4_i   : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 4
+      -- result and status --
+      res_o   : out std_ulogic_vector(XLEN-1 downto 0); -- operation result
+      valid_o : out std_ulogic -- data output valid
     );
   end component;
 
@@ -1366,61 +1484,42 @@ package neorv32_package is
   -- -------------------------------------------------------------------------------------------
   component neorv32_cpu_bus
     generic (
-      CPU_EXTENSION_RISCV_A : boolean; -- implement atomic extension?
-      CPU_EXTENSION_RISCV_C : boolean; -- implement compressed extension?
-      -- Physical memory protection (PMP) --
-      PMP_NUM_REGIONS       : natural; -- number of regions (0..64)
-      PMP_MIN_GRANULARITY   : natural  -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+      XLEN                : natural; -- data path width
+      PMP_NUM_REGIONS     : natural; -- number of regions (0..16)
+      PMP_MIN_GRANULARITY : natural  -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
     );
     port (
       -- global control --
-      clk_i          : in  std_ulogic; -- global clock, rising edge
-      rstn_i      : in  std_ulogic := '0'; -- global reset, low-active, async
-      ctrl_i         : in  std_ulogic_vector(ctrl_width_c-1 downto 0); -- main control bus
+      clk_i         : in  std_ulogic; -- global clock, rising edge
+      rstn_i        : in  std_ulogic := '0'; -- global reset, low-active, async
+      ctrl_i        : in  std_ulogic_vector(ctrl_width_c-1 downto 0); -- main control bus
       -- cpu instruction fetch interface --
-      fetch_pc_i     : in  std_ulogic_vector(data_width_c-1 downto 0); -- PC for instruction fetch
-      instr_o        : out std_ulogic_vector(data_width_c-1 downto 0); -- instruction
-      i_wait_o       : out std_ulogic; -- wait for fetch to complete
-      --
-      ma_instr_o     : out std_ulogic; -- misaligned instruction address
-      be_instr_o     : out std_ulogic; -- bus error on instruction access
+      fetch_pc_i    : in  std_ulogic_vector(XLEN-1 downto 0); -- PC for instruction fetch
+      i_pmp_fault_o : out std_ulogic; -- instruction fetch pmp fault
       -- cpu data access interface --
-      addr_i         : in  std_ulogic_vector(data_width_c-1 downto 0); -- ALU result -> access address
-      wdata_i        : in  std_ulogic_vector(data_width_c-1 downto 0); -- write data
-      rdata_o        : out std_ulogic_vector(data_width_c-1 downto 0); -- read data
-      mar_o          : out std_ulogic_vector(data_width_c-1 downto 0); -- current memory address register
-      d_wait_o       : out std_ulogic; -- wait for access to complete
-      --
-      excl_state_o   : out std_ulogic; -- atomic/exclusive access status
-      ma_load_o      : out std_ulogic; -- misaligned load data address
-      ma_store_o     : out std_ulogic; -- misaligned store data address
-      be_load_o      : out std_ulogic; -- bus error on load data access
-      be_store_o     : out std_ulogic; -- bus error on store data access
+      addr_i        : in  std_ulogic_vector(XLEN-1 downto 0); -- ALU result -> access address
+      wdata_i       : in  std_ulogic_vector(XLEN-1 downto 0); -- write data
+      rdata_o       : out std_ulogic_vector(XLEN-1 downto 0); -- read data
+      mar_o         : out std_ulogic_vector(XLEN-1 downto 0); -- current memory address register
+      d_wait_o      : out std_ulogic; -- wait for access to complete
+      ma_load_o     : out std_ulogic; -- misaligned load data address
+      ma_store_o    : out std_ulogic; -- misaligned store data address
+      be_load_o     : out std_ulogic; -- bus error on load data access
+      be_store_o    : out std_ulogic; -- bus error on store data access
       -- physical memory protection --
-      pmp_addr_i     : in  pmp_addr_if_t; -- addresses
-      pmp_ctrl_i     : in  pmp_ctrl_if_t; -- configs
-      -- instruction bus --
-      i_bus_addr_o   : out std_ulogic_vector(data_width_c-1 downto 0); -- bus access address
-      i_bus_rdata_i  : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus read data
-      i_bus_wdata_o  : out std_ulogic_vector(data_width_c-1 downto 0); -- bus write data
-      i_bus_ben_o    : out std_ulogic_vector(03 downto 0); -- byte enable
-      i_bus_we_o     : out std_ulogic; -- write enable
-      i_bus_re_o     : out std_ulogic; -- read enable
-      i_bus_lock_o   : out std_ulogic; -- exclusive access request
-      i_bus_ack_i    : in  std_ulogic; -- bus transfer acknowledge
-      i_bus_err_i    : in  std_ulogic; -- bus transfer error
-      i_bus_fence_o  : out std_ulogic; -- fence operation
+      pmp_addr_i    : in  pmp_addr_if_t; -- addresses
+      pmp_ctrl_i    : in  pmp_ctrl_if_t; -- configs
       -- data bus --
-      d_bus_addr_o   : out std_ulogic_vector(data_width_c-1 downto 0); -- bus access address
-      d_bus_rdata_i  : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus read data
-      d_bus_wdata_o  : out std_ulogic_vector(data_width_c-1 downto 0); -- bus write data
-      d_bus_ben_o    : out std_ulogic_vector(03 downto 0); -- byte enable
-      d_bus_we_o     : out std_ulogic; -- write enable
-      d_bus_re_o     : out std_ulogic; -- read enable
-      d_bus_lock_o   : out std_ulogic; -- exclusive access request
-      d_bus_ack_i    : in  std_ulogic; -- bus transfer acknowledge
-      d_bus_err_i    : in  std_ulogic; -- bus transfer error
-      d_bus_fence_o  : out std_ulogic  -- fence operation
+      d_bus_addr_o  : out std_ulogic_vector(XLEN-1 downto 0); -- bus access address
+      d_bus_rdata_i : in  std_ulogic_vector(XLEN-1 downto 0); -- bus read data
+      d_bus_wdata_o : out std_ulogic_vector(XLEN-1 downto 0); -- bus write data
+      d_bus_ben_o   : out std_ulogic_vector((XLEN/8)-1 downto 0); -- byte enable
+      d_bus_we_o    : out std_ulogic; -- write enable
+      d_bus_re_o    : out std_ulogic; -- read enable
+      d_bus_ack_i   : in  std_ulogic; -- bus transfer acknowledge
+      d_bus_err_i   : in  std_ulogic; -- bus transfer error
+      d_bus_fence_o : out std_ulogic; -- fence operation
+      d_bus_priv_o  : out std_ulogic  -- current effective privilege level
     );
   end component;
 
@@ -1434,6 +1533,7 @@ package neorv32_package is
       addr_i     : in  std_ulogic_vector(31 downto 0); -- address
       rden_i     : in  std_ulogic; -- read enable
       wren_i     : in  std_ulogic; -- write enable
+      data_i     : in  std_ulogic_vector(31 downto 0); -- data in
       data_o     : out std_ulogic_vector(31 downto 0); -- data out
       ack_o      : out std_ulogic; -- transfer acknowledge
       err_o      : out std_ulogic; -- transfer error
@@ -1444,7 +1544,8 @@ package neorv32_package is
       bus_ack_i  : in  std_ulogic; -- transfer acknowledge from bus system
       bus_err_i  : in  std_ulogic; -- transfer error from bus system
       bus_tmo_i  : in  std_ulogic; -- transfer timeout (external interface)
-      bus_ext_i  : in  std_ulogic  -- external bus access
+      bus_ext_i  : in  std_ulogic; -- external bus access
+      bus_xip_i  : in  std_ulogic  -- pending XIP access
     );
   end component;
 
@@ -1458,27 +1559,23 @@ package neorv32_package is
     );
     port (
       -- global control --
-      clk_i         : in  std_ulogic; -- global clock, rising edge
-      rstn_i        : in  std_ulogic; -- global reset, low-active, async
-      clear_i       : in  std_ulogic; -- cache clear
+      clk_i        : in  std_ulogic; -- global clock, rising edge
+      rstn_i       : in  std_ulogic; -- global reset, low-active, async
+      clear_i      : in  std_ulogic; -- cache clear
+      miss_o       : out std_ulogic; -- cache miss
       -- host controller interface --
-      host_addr_i   : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus access address
-      host_rdata_o  : out std_ulogic_vector(data_width_c-1 downto 0); -- bus read data
-      host_wdata_i  : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus write data
-      host_ben_i    : in  std_ulogic_vector(03 downto 0); -- byte enable
-      host_we_i     : in  std_ulogic; -- write enable
-      host_re_i     : in  std_ulogic; -- read enable
-      host_ack_o    : out std_ulogic; -- bus transfer acknowledge
-      host_err_o    : out std_ulogic; -- bus transfer error
+      host_addr_i  : in  std_ulogic_vector(31 downto 0); -- bus access address
+      host_rdata_o : out std_ulogic_vector(31 downto 0); -- bus read data
+      host_re_i    : in  std_ulogic; -- read enable
+      host_ack_o   : out std_ulogic; -- bus transfer acknowledge
+      host_err_o   : out std_ulogic; -- bus transfer error
       -- peripheral bus interface --
-      bus_addr_o    : out std_ulogic_vector(data_width_c-1 downto 0); -- bus access address
-      bus_rdata_i   : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus read data
-      bus_wdata_o   : out std_ulogic_vector(data_width_c-1 downto 0); -- bus write data
-      bus_ben_o     : out std_ulogic_vector(03 downto 0); -- byte enable
-      bus_we_o      : out std_ulogic; -- write enable
-      bus_re_o      : out std_ulogic; -- read enable
-      bus_ack_i     : in  std_ulogic; -- bus transfer acknowledge
-      bus_err_i     : in  std_ulogic  -- bus transfer error
+      bus_cached_o : out std_ulogic; -- set if cached (!) access in progress
+      bus_addr_o   : out std_ulogic_vector(31 downto 0); -- bus access address
+      bus_rdata_i  : in  std_ulogic_vector(31 downto 0); -- bus read data
+      bus_re_o     : out std_ulogic; -- read enable
+      bus_ack_i    : in  std_ulogic; -- bus transfer acknowledge
+      bus_err_i    : in  std_ulogic  -- bus transfer error
     );
   end component;
 
@@ -1494,42 +1591,48 @@ package neorv32_package is
       clk_i           : in  std_ulogic; -- global clock, rising edge
       rstn_i          : in  std_ulogic; -- global reset, low-active, async
       -- controller interface a --
-      ca_bus_addr_i   : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus access address
-      ca_bus_rdata_o  : out std_ulogic_vector(data_width_c-1 downto 0); -- bus read data
-      ca_bus_wdata_i  : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus write data
+      ca_bus_priv_i   : in  std_ulogic; -- current privilege level
+      ca_bus_cached_i : in  std_ulogic; -- set if cached transfer
+      ca_bus_addr_i   : in  std_ulogic_vector(31 downto 0); -- bus access address
+      ca_bus_rdata_o  : out std_ulogic_vector(31 downto 0); -- bus read data
+      ca_bus_wdata_i  : in  std_ulogic_vector(31 downto 0); -- bus write data
       ca_bus_ben_i    : in  std_ulogic_vector(03 downto 0); -- byte enable
       ca_bus_we_i     : in  std_ulogic; -- write enable
       ca_bus_re_i     : in  std_ulogic; -- read enable
-      ca_bus_lock_i   : in  std_ulogic; -- exclusive access request
       ca_bus_ack_o    : out std_ulogic; -- bus transfer acknowledge
       ca_bus_err_o    : out std_ulogic; -- bus transfer error
       -- controller interface b --
-      cb_bus_addr_i   : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus access address
-      cb_bus_rdata_o  : out std_ulogic_vector(data_width_c-1 downto 0); -- bus read data
-      cb_bus_wdata_i  : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus write data
+      cb_bus_priv_i   : in  std_ulogic; -- current privilege level
+      cb_bus_cached_i : in  std_ulogic; -- set if cached transfer
+      cb_bus_addr_i   : in  std_ulogic_vector(31 downto 0); -- bus access address
+      cb_bus_rdata_o  : out std_ulogic_vector(31 downto 0); -- bus read data
+      cb_bus_wdata_i  : in  std_ulogic_vector(31 downto 0); -- bus write data
       cb_bus_ben_i    : in  std_ulogic_vector(03 downto 0); -- byte enable
       cb_bus_we_i     : in  std_ulogic; -- write enable
       cb_bus_re_i     : in  std_ulogic; -- read enable
-      cb_bus_lock_i   : in  std_ulogic; -- exclusive access request
       cb_bus_ack_o    : out std_ulogic; -- bus transfer acknowledge
       cb_bus_err_o    : out std_ulogic; -- bus transfer error
       -- peripheral bus --
+      p_bus_priv_o    : out std_ulogic; -- current privilege level
+      p_bus_cached_o  : out std_ulogic; -- set if cached transfer
       p_bus_src_o     : out std_ulogic; -- access source: 0 = A, 1 = B
-      p_bus_addr_o    : out std_ulogic_vector(data_width_c-1 downto 0); -- bus access address
-      p_bus_rdata_i   : in  std_ulogic_vector(data_width_c-1 downto 0); -- bus read data
-      p_bus_wdata_o   : out std_ulogic_vector(data_width_c-1 downto 0); -- bus write data
+      p_bus_addr_o    : out std_ulogic_vector(31 downto 0); -- bus access address
+      p_bus_rdata_i   : in  std_ulogic_vector(31 downto 0); -- bus read data
+      p_bus_wdata_o   : out std_ulogic_vector(31 downto 0); -- bus write data
       p_bus_ben_o     : out std_ulogic_vector(03 downto 0); -- byte enable
       p_bus_we_o      : out std_ulogic; -- write enable
       p_bus_re_o      : out std_ulogic; -- read enable
-      p_bus_lock_o    : out std_ulogic; -- exclusive access request
       p_bus_ack_i     : in  std_ulogic; -- bus transfer acknowledge
       p_bus_err_i     : in  std_ulogic  -- bus transfer error
     );
   end component;
 
-  -- Component: CPU Compressed Instructions Decompressor ------------------------------------
+  -- Component: CPU Compressed Instructions De-Compressor -----------------------------------
   -- -------------------------------------------------------------------------------------------
   component neorv32_cpu_decompressor
+    generic (
+      FPU_ENABLE : boolean -- floating-point instruction enabled
+    );
     port (
       -- instruction input --
       ci_instr16_i : in  std_ulogic_vector(15 downto 0); -- compressed instruction input
@@ -1555,7 +1658,8 @@ package neorv32_package is
       addr_i : in  std_ulogic_vector(31 downto 0); -- address
       data_i : in  std_ulogic_vector(31 downto 0); -- data in
       data_o : out std_ulogic_vector(31 downto 0); -- data out
-      ack_o  : out std_ulogic -- transfer acknowledge
+      ack_o  : out std_ulogic; -- transfer acknowledge
+      err_o  : out std_ulogic  -- transfer error
     );
   end component;
 
@@ -1587,9 +1691,11 @@ package neorv32_package is
     port (
       clk_i  : in  std_ulogic; -- global clock line
       rden_i : in  std_ulogic; -- read enable
+      wren_i : in  std_ulogic; -- write enable
       addr_i : in  std_ulogic_vector(31 downto 0); -- address
       data_o : out std_ulogic_vector(31 downto 0); -- data out
-      ack_o  : out std_ulogic -- transfer acknowledge
+      ack_o  : out std_ulogic; -- transfer acknowledge
+      err_o  : out std_ulogic  -- transfer error
     );
   end component;
 
@@ -1599,6 +1705,7 @@ package neorv32_package is
     port (
       -- host access --
       clk_i  : in  std_ulogic; -- global clock line
+      rstn_i : in  std_ulogic; -- global reset line, low-active
       addr_i : in  std_ulogic_vector(31 downto 0); -- address
       rden_i : in  std_ulogic; -- read enable
       wren_i : in  std_ulogic; -- write enable
@@ -1618,12 +1725,14 @@ package neorv32_package is
     port (
       -- host access --
       clk_i  : in  std_ulogic; -- global clock line
+      rstn_i : in  std_ulogic; -- global reset line, low-active
       addr_i : in  std_ulogic_vector(31 downto 0); -- address
       rden_i : in  std_ulogic; -- read enable
       wren_i : in  std_ulogic; -- write enable
       data_i : in  std_ulogic_vector(31 downto 0); -- data in
       data_o : out std_ulogic_vector(31 downto 0); -- data out
       ack_o  : out std_ulogic; -- transfer acknowledge
+      err_o  : out std_ulogic; -- transfer error
       -- parallel io --
       gpio_o : out std_ulogic_vector(63 downto 0);
       gpio_i : in  std_ulogic_vector(63 downto 0)
@@ -1633,27 +1742,26 @@ package neorv32_package is
   -- Component: Watchdog Timer (WDT) --------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   component neorv32_wdt
-    generic (
-      DEBUG_EN : boolean -- CPU debug mode implemented?
-    );
     port (
       -- host access --
       clk_i       : in  std_ulogic; -- global clock line
-      rstn_i      : in  std_ulogic; -- global reset line, low-active
+      rstn_ext_i  : in  std_ulogic; -- external reset line, low-active, async
+      rstn_int_i  : in  std_ulogic; -- internal reset line, low-active, async
       rden_i      : in  std_ulogic; -- read enable
       wren_i      : in  std_ulogic; -- write enable
       addr_i      : in  std_ulogic_vector(31 downto 0); -- address
       data_i      : in  std_ulogic_vector(31 downto 0); -- data in
       data_o      : out std_ulogic_vector(31 downto 0); -- data out
       ack_o       : out std_ulogic; -- transfer acknowledge
-      -- CPU in debug mode? --
-      cpu_debug_i : in  std_ulogic;
+      -- CPU status --
+      cpu_debug_i : in  std_ulogic; -- CPU is in debug mode
+      cpu_sleep_i : in  std_ulogic; -- CPU is in sleep mode
       -- clock generator --
       clkgen_en_o : out std_ulogic; -- enable clock generator
       clkgen_i    : in  std_ulogic_vector(07 downto 0);
       -- timeout event --
       irq_o       : out std_ulogic; -- timeout IRQ
-      rstn_o      : out std_ulogic  -- timeout reset, low_active, use it as async!
+      rstn_o      : out std_ulogic  -- timeout reset, low_active, sync
     );
   end component;
 
@@ -1668,6 +1776,7 @@ package neorv32_package is
     port (
       -- host access --
       clk_i       : in  std_ulogic; -- global clock line
+      rstn_i      : in  std_ulogic; -- global reset line, low-active
       addr_i      : in  std_ulogic_vector(31 downto 0); -- address
       rden_i      : in  std_ulogic; -- read enable
       wren_i      : in  std_ulogic; -- write enable
@@ -1692,9 +1801,13 @@ package neorv32_package is
   -- Component: Serial Peripheral Interface (SPI) -------------------------------------------
   -- -------------------------------------------------------------------------------------------
   component neorv32_spi
+    generic (
+      IO_SPI_FIFO : natural -- SPI RTX fifo depth, has to be zero or a power of two
+    );
     port (
       -- host access --
       clk_i       : in  std_ulogic; -- global clock line
+      rstn_i      : in  std_ulogic; -- global reset line, low-active
       addr_i      : in  std_ulogic_vector(31 downto 0); -- address
       rden_i      : in  std_ulogic; -- read enable
       wren_i      : in  std_ulogic; -- write enable
@@ -1720,6 +1833,7 @@ package neorv32_package is
     port (
       -- host access --
       clk_i       : in  std_ulogic; -- global clock line
+      rstn_i      : in  std_ulogic; -- global reset line, low-active
       addr_i      : in  std_ulogic_vector(31 downto 0); -- address
       rden_i      : in  std_ulogic; -- read enable
       wren_i      : in  std_ulogic; -- write enable
@@ -1729,9 +1843,11 @@ package neorv32_package is
       -- clock generator --
       clkgen_en_o : out std_ulogic; -- enable clock generator
       clkgen_i    : in  std_ulogic_vector(07 downto 0);
-      -- com lines --
-      twi_sda_io  : inout std_logic; -- serial data line
-      twi_scl_io  : inout std_logic; -- serial clock line
+      -- com lines (require external tri-state drivers) --
+      twi_sda_i   : in  std_ulogic; -- serial data line input
+      twi_sda_o   : out std_ulogic; -- serial data line output
+      twi_scl_i   : in  std_ulogic; -- serial clock line input
+      twi_scl_o   : out std_ulogic; -- serial clock line output
       -- interrupt --
       irq_o       : out std_ulogic -- transfer done IRQ
     );
@@ -1746,6 +1862,7 @@ package neorv32_package is
     port (
       -- host access --
       clk_i       : in  std_ulogic; -- global clock line
+      rstn_i      : in  std_ulogic; -- global reset line, low-active
       addr_i      : in  std_ulogic_vector(31 downto 0); -- address
       rden_i      : in  std_ulogic; -- read enable
       wren_i      : in  std_ulogic; -- write enable
@@ -1763,9 +1880,13 @@ package neorv32_package is
   -- Component: True Random Number Generator (TRNG) -----------------------------------------
   -- -------------------------------------------------------------------------------------------
   component neorv32_trng
+    generic (
+      IO_TRNG_FIFO : natural := 1 -- RND fifo depth, has to be a power of two, min 1
+    );
     port (
       -- host access --
       clk_i  : in  std_ulogic; -- global clock line
+      rstn_i : in  std_ulogic; -- global reset line, low-active
       addr_i : in  std_ulogic_vector(31 downto 0); -- address
       rden_i : in  std_ulogic; -- read enable
       wren_i : in  std_ulogic; -- write enable
@@ -1789,38 +1910,40 @@ package neorv32_package is
       BUS_TIMEOUT       : natural; -- cycles after an UNACKNOWLEDGED bus access triggers a bus fault exception
       PIPE_MODE         : boolean; -- protocol: false=classic/standard wishbone mode, true=pipelined wishbone mode
       BIG_ENDIAN        : boolean; -- byte order: true=big-endian, false=little-endian
-      ASYNC_RX          : boolean  -- use register buffer for RX data when false
+      ASYNC_RX          : boolean; -- use register buffer for RX data when false
+      ASYNC_TX          : boolean  -- use register buffer for TX data when false
     );
     port (
       -- global control --
-      clk_i     : in  std_ulogic; -- global clock line
-      rstn_i    : in  std_ulogic; -- global reset line, low-active
+      clk_i      : in  std_ulogic; -- global clock line
+      rstn_i     : in  std_ulogic; -- global reset line, low-active
       -- host access --
-      src_i     : in  std_ulogic; -- access type (0: data, 1:instruction)
-      addr_i    : in  std_ulogic_vector(31 downto 0); -- address
-      rden_i    : in  std_ulogic; -- read enable
-      wren_i    : in  std_ulogic; -- write enable
-      ben_i     : in  std_ulogic_vector(03 downto 0); -- byte write enable
-      data_i    : in  std_ulogic_vector(31 downto 0); -- data in
-      data_o    : out std_ulogic_vector(31 downto 0); -- data out
-      lock_i    : in  std_ulogic; -- exclusive access request
-      ack_o     : out std_ulogic; -- transfer acknowledge
-      err_o     : out std_ulogic; -- transfer error
-      tmo_o     : out std_ulogic; -- transfer timeout
-      priv_i    : in  std_ulogic_vector(01 downto 0); -- current CPU privilege level
-      ext_o     : out std_ulogic; -- active external access
+      src_i      : in  std_ulogic; -- access type (0: data, 1:instruction)
+      addr_i     : in  std_ulogic_vector(31 downto 0); -- address
+      rden_i     : in  std_ulogic; -- read enable
+      wren_i     : in  std_ulogic; -- write enable
+      ben_i      : in  std_ulogic_vector(03 downto 0); -- byte write enable
+      data_i     : in  std_ulogic_vector(31 downto 0); -- data in
+      data_o     : out std_ulogic_vector(31 downto 0); -- data out
+      ack_o      : out std_ulogic; -- transfer acknowledge
+      err_o      : out std_ulogic; -- transfer error
+      tmo_o      : out std_ulogic; -- transfer timeout
+      priv_i     : in  std_ulogic; -- current CPU privilege level
+      ext_o      : out std_ulogic; -- active external access
+      -- xip configuration --
+      xip_en_i   : in  std_ulogic; -- XIP module enabled
+      xip_page_i : in  std_ulogic_vector(03 downto 0); -- XIP memory page
       -- wishbone interface --
-      wb_tag_o  : out std_ulogic_vector(02 downto 0); -- request tag
-      wb_adr_o  : out std_ulogic_vector(31 downto 0); -- address
-      wb_dat_i  : in  std_ulogic_vector(31 downto 0); -- read data
-      wb_dat_o  : out std_ulogic_vector(31 downto 0); -- write data
-      wb_we_o   : out std_ulogic; -- read/write
-      wb_sel_o  : out std_ulogic_vector(03 downto 0); -- byte enable
-      wb_stb_o  : out std_ulogic; -- strobe
-      wb_cyc_o  : out std_ulogic; -- valid cycle
-      wb_lock_o : out std_ulogic; -- exclusive access request
-      wb_ack_i  : in  std_ulogic; -- transfer acknowledge
-      wb_err_i  : in  std_ulogic  -- transfer error
+      wb_tag_o   : out std_ulogic_vector(02 downto 0); -- request tag
+      wb_adr_o   : out std_ulogic_vector(31 downto 0); -- address
+      wb_dat_i   : in  std_ulogic_vector(31 downto 0); -- read data
+      wb_dat_o   : out std_ulogic_vector(31 downto 0); -- write data
+      wb_we_o    : out std_ulogic; -- read/write
+      wb_sel_o   : out std_ulogic_vector(03 downto 0); -- byte enable
+      wb_stb_o   : out std_ulogic; -- strobe
+      wb_cyc_o   : out std_ulogic; -- valid cycle
+      wb_ack_i   : in  std_ulogic; -- transfer acknowledge
+      wb_err_i   : in  std_ulogic  -- transfer error
     );
   end component;
 
@@ -1836,6 +1959,7 @@ package neorv32_package is
       -- host access --
       clk_i       : in  std_ulogic; -- global clock line
       rstn_i      : in  std_ulogic; -- global reset line, low-active, use as async
+      priv_i      : in  std_ulogic; -- current CPU privilege mode
       addr_i      : in  std_ulogic_vector(31 downto 0); -- address
       rden_i      : in  std_ulogic; -- read enable
       wren_i      : in  std_ulogic; -- word write enable
@@ -1863,6 +1987,7 @@ package neorv32_package is
     port (
       -- host access --
       clk_i       : in  std_ulogic; -- global clock line
+      rstn_i      : in  std_ulogic; -- global reset line, low-active
       addr_i      : in  std_ulogic_vector(31 downto 0); -- address
       rden_i      : in  std_ulogic; -- read enable
       wren_i      : in  std_ulogic; -- write enable
@@ -1891,6 +2016,7 @@ package neorv32_package is
     port (
       -- host access --
       clk_i          : in  std_ulogic; -- global clock line
+      rstn_i         : in  std_ulogic; -- global reset line, low-active
       addr_i         : in  std_ulogic_vector(31 downto 0); -- address
       rden_i         : in  std_ulogic; -- read enable
       wren_i         : in  std_ulogic; -- write enable
@@ -1898,16 +2024,18 @@ package neorv32_package is
       data_o         : out std_ulogic_vector(31 downto 0); -- data out
       ack_o          : out std_ulogic; -- transfer acknowledge
       -- interrupt --
-      irq_tx_o       : out std_ulogic; -- transmission done
-      irq_rx_o       : out std_ulogic; -- data received
+      irq_tx_o       : out std_ulogic;
+      irq_rx_o       : out std_ulogic;
       -- TX stream interfaces --
       slink_tx_dat_o : out sdata_8x32_t; -- output data
       slink_tx_val_o : out std_ulogic_vector(7 downto 0); -- valid output
       slink_tx_rdy_i : in  std_ulogic_vector(7 downto 0); -- ready to send
+      slink_tx_lst_o : out std_ulogic_vector(7 downto 0); -- last data of packet
       -- RX stream interfaces --
       slink_rx_dat_i : in  sdata_8x32_t; -- input data
       slink_rx_val_i : in  std_ulogic_vector(7 downto 0); -- valid input
-      slink_rx_rdy_o : out std_ulogic_vector(7 downto 0)  -- ready to receive
+      slink_rx_rdy_o : out std_ulogic_vector(7 downto 0); -- ready to receive
+      slink_rx_lst_i : in  std_ulogic_vector(7 downto 0)  -- last data of packet
     );
   end component;
 
@@ -1922,6 +2050,7 @@ package neorv32_package is
     port (
       -- host access --
       clk_i     : in  std_ulogic; -- global clock line
+      rstn_i    : in  std_ulogic; -- global reset line, low-active
       addr_i    : in  std_ulogic_vector(31 downto 0); -- address
       rden_i    : in  std_ulogic; -- read enable
       wren_i    : in  std_ulogic; -- write enable
@@ -1941,6 +2070,7 @@ package neorv32_package is
     port (
       -- host access --
       clk_i       : in  std_ulogic; -- global clock line
+      rstn_i      : in  std_ulogic; -- global reset line, low-active
       addr_i      : in  std_ulogic_vector(31 downto 0); -- address
       rden_i      : in  std_ulogic; -- read enable
       wren_i      : in  std_ulogic; -- write enable
@@ -1955,66 +2085,119 @@ package neorv32_package is
     );
   end component;
 
+  -- Component: Execute In Place Module (XIP) -----------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  component neorv32_xip
+    port (
+      -- globals --
+      clk_i       : in  std_ulogic; -- global clock line
+      rstn_i      : in  std_ulogic; -- global reset line, low-active
+      -- host access: control register access port --
+      ct_addr_i   : in  std_ulogic_vector(31 downto 0); -- address
+      ct_rden_i   : in  std_ulogic; -- read enable
+      ct_wren_i   : in  std_ulogic; -- write enable
+      ct_data_i   : in  std_ulogic_vector(31 downto 0); -- data in
+      ct_data_o   : out std_ulogic_vector(31 downto 0); -- data out
+      ct_ack_o    : out std_ulogic; -- transfer acknowledge
+      -- host access: transparent SPI access port (read-only) --
+      acc_addr_i  : in  std_ulogic_vector(31 downto 0); -- address
+      acc_rden_i  : in  std_ulogic; -- read enable
+      acc_wren_i  : in  std_ulogic; -- write enable
+      acc_data_o  : out std_ulogic_vector(31 downto 0); -- data out
+      acc_ack_o   : out std_ulogic; -- transfer acknowledge
+      acc_err_o   : out std_ulogic; -- transfer error
+      -- status --
+      xip_en_o    : out std_ulogic; -- XIP enable
+      xip_acc_o   : out std_ulogic; -- pending XIP access
+      xip_page_o  : out std_ulogic_vector(03 downto 0); -- XIP page
+      -- clock generator --
+      clkgen_en_o : out std_ulogic; -- enable clock generator
+      clkgen_i    : in  std_ulogic_vector(07 downto 0);
+      -- SPI device interface --
+      spi_csn_o   : out std_ulogic; -- chip-select, low-active
+      spi_clk_o   : out std_ulogic; -- serial clock
+      spi_data_i  : in  std_ulogic; -- device data output
+      spi_data_o  : out std_ulogic  -- controller data output
+    );
+  end component;
+
+  -- Component: 1-Wire Interface Controller (ONEWIRE) ---------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  component neorv32_onewire
+    port (
+      -- host access --
+      clk_i       : in  std_ulogic; -- global clock line
+      rstn_i      : in  std_ulogic; -- global reset line, low-active
+      addr_i      : in  std_ulogic_vector(31 downto 0); -- address
+      rden_i      : in  std_ulogic; -- read enable
+      wren_i      : in  std_ulogic; -- write enable
+      data_i      : in  std_ulogic_vector(31 downto 0); -- data in
+      data_o      : out std_ulogic_vector(31 downto 0); -- data out
+      ack_o       : out std_ulogic; -- transfer acknowledge
+      -- clock generator --
+      clkgen_en_o : out std_ulogic; -- enable clock generator
+      clkgen_i    : in  std_ulogic_vector(07 downto 0);
+      -- com lines (require external tri-state drivers) --
+      onewire_i   : in  std_ulogic; -- 1-wire line state
+      onewire_o   : out std_ulogic; -- 1-wire line pull-down
+      -- interrupt --
+      irq_o       : out std_ulogic -- transfer done IRQ
+    );
+  end component;
+
   -- Component: System Configuration Information Memory (SYSINFO) ---------------------------
   -- -------------------------------------------------------------------------------------------
   component neorv32_sysinfo
     generic (
       -- General --
-      CLOCK_FREQUENCY              : natural; -- clock frequency of clk_i in Hz
-      INT_BOOTLOADER_EN            : boolean; -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
-      -- RISC-V CPU Extensions --
-      CPU_EXTENSION_RISCV_Zfinx    : boolean; -- implement 32-bit floating-point extension (using INT reg!)
-      CPU_EXTENSION_RISCV_Zicsr    : boolean; -- implement CSR system?
-      CPU_EXTENSION_RISCV_Zicntr   : boolean; -- implement base counters?
-      CPU_EXTENSION_RISCV_Zihpm    : boolean; -- implement hardware performance monitors?
-      CPU_EXTENSION_RISCV_Zifencei : boolean; -- implement instruction stream sync.?
-      CPU_EXTENSION_RISCV_Zmmul    : boolean; -- implement multiply-only M sub-extension?
-      CPU_EXTENSION_RISCV_DEBUG    : boolean; -- implement CPU debug mode?
-      -- Extension Options --
-      FAST_MUL_EN                  : boolean; -- use DSPs for M extension's multiplier
-      FAST_SHIFT_EN                : boolean; -- use barrel shifter for shift operations
-      CPU_CNT_WIDTH                : natural; -- total width of CPU cycle and instret counters (0..64)
+      CLOCK_FREQUENCY      : natural; -- clock frequency of clk_i in Hz
+      CUSTOM_ID            : std_ulogic_vector(31 downto 0) := x"00000000"; -- custom user-defined ID
+      INT_BOOTLOADER_EN    : boolean; -- boot configuration: true = boot explicit bootloader; false = boot from int/ext (I)MEM
       -- Physical memory protection (PMP) --
-      PMP_NUM_REGIONS              : natural; -- number of regions (0..64)
+      PMP_NUM_REGIONS      : natural; -- number of regions (0..16)
       -- Internal Instruction memory --
-      MEM_INT_IMEM_EN              : boolean; -- implement processor-internal instruction memory
-      MEM_INT_IMEM_SIZE            : natural; -- size of processor-internal instruction memory in bytes
+      MEM_INT_IMEM_EN      : boolean; -- implement processor-internal instruction memory
+      MEM_INT_IMEM_SIZE    : natural; -- size of processor-internal instruction memory in bytes
       -- Internal Data memory --
-      MEM_INT_DMEM_EN              : boolean; -- implement processor-internal data memory
-      MEM_INT_DMEM_SIZE            : natural; -- size of processor-internal data memory in bytes
+      MEM_INT_DMEM_EN      : boolean; -- implement processor-internal data memory
+      MEM_INT_DMEM_SIZE    : natural; -- size of processor-internal data memory in bytes
       -- Internal Cache memory --
-      ICACHE_EN                    : boolean; -- implement instruction cache
-      ICACHE_NUM_BLOCKS            : natural; -- i-cache: number of blocks (min 2), has to be a power of 2
-      ICACHE_BLOCK_SIZE            : natural; -- i-cache: block size in bytes (min 4), has to be a power of 2
-      ICACHE_ASSOCIATIVITY         : natural; -- i-cache: associativity (min 1), has to be a power 2
+      ICACHE_EN            : boolean; -- implement instruction cache
+      ICACHE_NUM_BLOCKS    : natural; -- i-cache: number of blocks (min 2), has to be a power of 2
+      ICACHE_BLOCK_SIZE    : natural; -- i-cache: block size in bytes (min 4), has to be a power of 2
+      ICACHE_ASSOCIATIVITY : natural; -- i-cache: associativity (min 1), has to be a power 2
       -- External memory interface --
-      MEM_EXT_EN                   : boolean; -- implement external memory bus interface?
-      MEM_EXT_BIG_ENDIAN           : boolean; -- byte order: true=big-endian, false=little-endian
+      MEM_EXT_EN           : boolean; -- implement external memory bus interface?
+      MEM_EXT_BIG_ENDIAN   : boolean; -- byte order: true=big-endian, false=little-endian
       -- On-Chip Debugger --
-      ON_CHIP_DEBUGGER_EN          : boolean; -- implement OCD?
+      ON_CHIP_DEBUGGER_EN  : boolean; -- implement OCD?
       -- Processor peripherals --
-      IO_GPIO_EN                   : boolean; -- implement general purpose input/output port unit (GPIO)?
-      IO_MTIME_EN                  : boolean; -- implement machine system timer (MTIME)?
-      IO_UART0_EN                  : boolean; -- implement primary universal asynchronous receiver/transmitter (UART0)?
-      IO_UART1_EN                  : boolean; -- implement secondary universal asynchronous receiver/transmitter (UART1)?
-      IO_SPI_EN                    : boolean; -- implement serial peripheral interface (SPI)?
-      IO_TWI_EN                    : boolean; -- implement two-wire interface (TWI)?
-      IO_PWM_NUM_CH                : natural; -- number of PWM channels to implement
-      IO_WDT_EN                    : boolean; -- implement watch dog timer (WDT)?
-      IO_TRNG_EN                   : boolean; -- implement true random number generator (TRNG)?
-      IO_CFS_EN                    : boolean; -- implement custom functions subsystem (CFS)?
-      IO_SLINK_EN                  : boolean; -- implement stream link interface?
-      IO_NEOLED_EN                 : boolean; -- implement NeoPixel-compatible smart LED interface (NEOLED)?
-      IO_XIRQ_NUM_CH               : natural; -- number of external interrupt (XIRQ) channels to implement
-      IO_GPTMR_EN                  : boolean  -- implement general purpose timer (GPTMR)?
+      IO_GPIO_EN           : boolean; -- implement general purpose input/output port unit (GPIO)?
+      IO_MTIME_EN          : boolean; -- implement machine system timer (MTIME)?
+      IO_UART0_EN          : boolean; -- implement primary universal asynchronous receiver/transmitter (UART0)?
+      IO_UART1_EN          : boolean; -- implement secondary universal asynchronous receiver/transmitter (UART1)?
+      IO_SPI_EN            : boolean; -- implement serial peripheral interface (SPI)?
+      IO_TWI_EN            : boolean; -- implement two-wire interface (TWI)?
+      IO_PWM_NUM_CH        : natural; -- number of PWM channels to implement
+      IO_WDT_EN            : boolean; -- implement watch dog timer (WDT)?
+      IO_TRNG_EN           : boolean; -- implement true random number generator (TRNG)?
+      IO_CFS_EN            : boolean; -- implement custom functions subsystem (CFS)?
+      IO_SLINK_EN          : boolean; -- implement stream link interface?
+      IO_NEOLED_EN         : boolean; -- implement NeoPixel-compatible smart LED interface (NEOLED)?
+      IO_XIRQ_NUM_CH       : natural; -- number of external interrupt (XIRQ) channels to implement
+      IO_GPTMR_EN          : boolean; -- implement general purpose timer (GPTMR)?
+      IO_XIP_EN            : boolean; -- implement execute in place module (XIP)?
+      IO_ONEWIRE_EN        : boolean  -- implement 1-wire interface (ONEWIRE)?
     );
     port (
       -- host access --
       clk_i  : in  std_ulogic; -- global clock line
       addr_i : in  std_ulogic_vector(31 downto 0); -- address
       rden_i : in  std_ulogic; -- read enable
+      wren_i : in  std_ulogic; -- write enable
       data_o : out std_ulogic_vector(31 downto 0); -- data out
-      ack_o  : out std_ulogic  -- transfer acknowledge
+      ack_o  : out std_ulogic; -- transfer acknowledge
+      err_o  : out std_ulogic  -- transfer error
     );
   end component;
 
@@ -2025,14 +2208,14 @@ package neorv32_package is
       FIFO_DEPTH : natural; -- number of fifo entries; has to be a power of two; min 1
       FIFO_WIDTH : natural; -- size of data elements in fifo
       FIFO_RSYNC : boolean; -- false = async read; true = sync read
-      FIFO_SAFE  : boolean  -- true = allow read/write only if entry available
+      FIFO_SAFE  : boolean; -- true = allow read/write only if entry available
+      FIFO_GATE  : boolean  -- true = use output gate (set to zero if no valid data available)
     );
     port (
       -- control --
       clk_i   : in  std_ulogic; -- clock, rising edge
       rstn_i  : in  std_ulogic; -- async reset, low-active
       clear_i : in  std_ulogic; -- sync reset, high-active
-      level_o : out std_ulogic_vector(index_size_f(FIFO_DEPTH) downto 0); -- fill level
       half_o  : out std_ulogic; -- FIFO is at least half full
       -- write port --
       wdata_i : in  std_ulogic_vector(FIFO_WIDTH-1 downto 0); -- write data
@@ -2064,6 +2247,7 @@ package neorv32_package is
       dmi_resp_data_o  : out std_ulogic_vector(31 downto 0);
       dmi_resp_err_o   : out std_ulogic; -- 0=ok, 1=error
       -- CPU bus access --
+      cpu_debug_i      : in  std_ulogic; -- CPU is in debug mode
       cpu_addr_i       : in  std_ulogic_vector(31 downto 0); -- address
       cpu_rden_i       : in  std_ulogic; -- read enable
       cpu_wren_i       : in  std_ulogic; -- write enable
@@ -2111,6 +2295,10 @@ package neorv32_package is
 end neorv32_package;
 
 package body neorv32_package is
+
+-- ****************************************************************************************************************************
+-- Functions
+-- ****************************************************************************************************************************
 
   -- Function: Minimal required number of bits to represent <input> numbers -----------------
   -- -------------------------------------------------------------------------------------------
@@ -2190,6 +2378,30 @@ package body neorv32_package is
     end if;
   end function bool_to_ulogic_f;
 
+  -- Function: Convert binary to gray -------------------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  function bin_to_gray_f(input : std_ulogic_vector) return std_ulogic_vector is
+    variable tmp_v : std_ulogic_vector(input'range);
+  begin
+    tmp_v(input'length-1) := input(input'length-1); -- keep MSB
+    for i in input'length-2 downto 0 loop
+      tmp_v(i) := input(i) xor input(i+1);
+    end loop; -- i
+    return tmp_v;
+  end function bin_to_gray_f;
+
+  -- Function: Convert gray to binary -------------------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  function gray_to_bin_f(input : std_ulogic_vector) return std_ulogic_vector is
+    variable tmp_v : std_ulogic_vector(input'range);
+  begin
+    tmp_v(input'length-1) := input(input'length-1); -- keep MSB
+    for i in input'length-2 downto 0 loop
+      tmp_v(i) := tmp_v(i+1) xor input(i);
+    end loop; -- i
+    return tmp_v;
+  end function gray_to_bin_f;
+
   -- Function: OR-reduce all bits -----------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   function or_reduce_f(a : std_ulogic_vector) return std_ulogic is
@@ -2229,55 +2441,70 @@ package body neorv32_package is
   -- Function: Convert std_ulogic_vector to hex char ----------------------------------------
   -- -------------------------------------------------------------------------------------------
   function to_hexchar_f(input : std_ulogic_vector(3 downto 0)) return character is
-    variable output_v : character;
+    variable res_v : character;
   begin
     case input is
-      when x"0"   => output_v := '0';
-      when x"1"   => output_v := '1';
-      when x"2"   => output_v := '2';
-      when x"3"   => output_v := '3';
-      when x"4"   => output_v := '4';
-      when x"5"   => output_v := '5';
-      when x"6"   => output_v := '6';
-      when x"7"   => output_v := '7';
-      when x"8"   => output_v := '8';
-      when x"9"   => output_v := '9';
-      when x"a"   => output_v := 'a';
-      when x"b"   => output_v := 'b';
-      when x"c"   => output_v := 'c';
-      when x"d"   => output_v := 'd';
-      when x"e"   => output_v := 'e';
-      when x"f"   => output_v := 'f';
-      when others => output_v := '?';
+      when x"0"   => res_v := '0';
+      when x"1"   => res_v := '1';
+      when x"2"   => res_v := '2';
+      when x"3"   => res_v := '3';
+      when x"4"   => res_v := '4';
+      when x"5"   => res_v := '5';
+      when x"6"   => res_v := '6';
+      when x"7"   => res_v := '7';
+      when x"8"   => res_v := '8';
+      when x"9"   => res_v := '9';
+      when x"a"   => res_v := 'a';
+      when x"b"   => res_v := 'b';
+      when x"c"   => res_v := 'c';
+      when x"d"   => res_v := 'd';
+      when x"e"   => res_v := 'e';
+      when x"f"   => res_v := 'f';
+      when others => res_v := '?';
     end case;
-    return output_v;
+    return res_v;
   end function to_hexchar_f;
 
-  -- Function: Convert hex char to std_ulogic_vector ----------------------------------------
+  -- Function: Convert 32-bit std_ulogic_vector to hex string -------------------------------
+  -- -------------------------------------------------------------------------------------------
+  function to_hstring32_f(input : std_ulogic_vector(31 downto 0)) return string is
+    variable res_v : string(1 to 8);
+    variable tmp_v : std_ulogic_vector(31 downto 0);
+    variable hex_v : std_ulogic_vector(3 downto 0);
+  begin
+    tmp_v := bit_rev_f(input);
+    for i in 0 to 7 loop
+      hex_v := tmp_v(i*4+3 downto i*4+0);
+      res_v(i+1) := to_hexchar_f(bit_rev_f(hex_v));
+    end loop; -- i
+    return res_v;
+  end function to_hstring32_f;
+
+  -- Function: Convert hex char to 4-bit std_ulogic_vector ----------------------------------
   -- -------------------------------------------------------------------------------------------
   function hexchar_to_stdulogicvector_f(input : character) return std_ulogic_vector is
-    variable hex_value_v : std_ulogic_vector(3 downto 0);
+    variable res_v : std_ulogic_vector(3 downto 0);
   begin
     case input is
-      when '0'       => hex_value_v := x"0";
-      when '1'       => hex_value_v := x"1";
-      when '2'       => hex_value_v := x"2";
-      when '3'       => hex_value_v := x"3"; 
-      when '4'       => hex_value_v := x"4";
-      when '5'       => hex_value_v := x"5";
-      when '6'       => hex_value_v := x"6";
-      when '7'       => hex_value_v := x"7";
-      when '8'       => hex_value_v := x"8";
-      when '9'       => hex_value_v := x"9";
-      when 'a' | 'A' => hex_value_v := x"a";
-      when 'b' | 'B' => hex_value_v := x"b";
-      when 'c' | 'C' => hex_value_v := x"c";
-      when 'd' | 'D' => hex_value_v := x"d";
-      when 'e' | 'E' => hex_value_v := x"e";
-      when 'f' | 'F' => hex_value_v := x"f";
-      when others    => hex_value_v := (others => 'X');
+      when '0'       => res_v := x"0";
+      when '1'       => res_v := x"1";
+      when '2'       => res_v := x"2";
+      when '3'       => res_v := x"3";
+      when '4'       => res_v := x"4";
+      when '5'       => res_v := x"5";
+      when '6'       => res_v := x"6";
+      when '7'       => res_v := x"7";
+      when '8'       => res_v := x"8";
+      when '9'       => res_v := x"9";
+      when 'a' | 'A' => res_v := x"a";
+      when 'b' | 'B' => res_v := x"b";
+      when 'c' | 'C' => res_v := x"c";
+      when 'd' | 'D' => res_v := x"d";
+      when 'e' | 'E' => res_v := x"e";
+      when 'f' | 'F' => res_v := x"f";
+      when others    => res_v := x"0";
     end case;
-    return hex_value_v;
+    return res_v;
   end function hexchar_to_stdulogicvector_f;
 
   -- Function: Bit reversal -----------------------------------------------------------------
@@ -2294,13 +2521,19 @@ package body neorv32_package is
   -- Function: Test if input number is a power of two ---------------------------------------
   -- -------------------------------------------------------------------------------------------
   function is_power_of_two_f(input : natural) return boolean is
+    variable tmp : unsigned(31 downto 0);
   begin
-    if (input = 1) then -- 2^0
-      return true;
-    elsif ((input / 2) /= 0) and ((input mod 2) = 0) then
+    if (input = 0) then
+      return false;
+    elsif (input = 1) then
       return true;
     else
-      return false;
+      tmp := to_unsigned(input, 32);
+      if ((tmp and (tmp - 1)) = 0) then
+        return true;
+      else
+        return false;
+      end if;
     end if;
   end function is_power_of_two_f;
 
@@ -2315,68 +2548,6 @@ package body neorv32_package is
     output_v(31 downto 24) := input(07 downto 00);
     return output_v;
   end function bswap32_f;
-
-  -- Function: Convert char to lowercase ----------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  function char_to_lower_f(ch : character) return character is
-    variable res: character;
-   begin
-     case ch is
-       when 'A'    => res := 'a';
-       when 'B'    => res := 'b';
-       when 'C'    => res := 'c';
-       when 'D'    => res := 'd';
-       when 'E'    => res := 'e';
-       when 'F'    => res := 'f';
-       when 'G'    => res := 'g';
-       when 'H'    => res := 'h';
-       when 'I'    => res := 'i';
-       when 'J'    => res := 'j';
-       when 'K'    => res := 'k';
-       when 'L'    => res := 'l';
-       when 'M'    => res := 'm';
-       when 'N'    => res := 'n';
-       when 'O'    => res := 'o';
-       when 'P'    => res := 'p';
-       when 'Q'    => res := 'q';
-       when 'R'    => res := 'r';
-       when 'S'    => res := 's';
-       when 'T'    => res := 't';
-       when 'U'    => res := 'u';
-       when 'V'    => res := 'v';
-       when 'W'    => res := 'w';
-       when 'X'    => res := 'x';
-       when 'Y'    => res := 'y';
-       when 'Z'    => res := 'z';
-       when others => res := ch;
-      end case;
-    return res;
-  end function char_to_lower_f;
-
-  -- Function: Compare strings (convert to lower case, check lengths) -----------------------
-  -- -------------------------------------------------------------------------------------------
-  function str_equal_f(str0 : string; str1 : string) return boolean is
-    variable tmp0_v : string(str0'range);
-    variable tmp1_v : string(str1'range);
-  begin
-    if (str0'length /= str1'length) then -- equal length?
-      return false;
-    else
-      -- convert to lower case --
-      for i in str0'range loop
-        tmp0_v(i) := char_to_lower_f(str0(i));
-      end loop;
-      for i in str1'range loop
-        tmp1_v(i) := char_to_lower_f(str1(i));
-      end loop;
-      -- compare lowercase strings --
-      if (tmp0_v = tmp1_v) then
-        return true;
-      else
-        return false;
-      end if;
-    end if;
-  end function str_equal_f;
 
   -- Function: Population count (number of set bits) ----------------------------------------
   -- -------------------------------------------------------------------------------------------
@@ -2425,8 +2596,41 @@ package body neorv32_package is
   end function mem32_init_f;
 
 
-  -- Finally set deferred constant, see IEEE 1076-2008 14.4.2.1
-  constant def_rst_val_c : std_ulogic := cond_sel_stdulogic_f(dedicated_reset_c, '0', '-');
-
-
 end neorv32_package;
+
+-- ****************************************************************************************************************************
+-- Additional Packages
+-- ****************************************************************************************************************************
+
+  -- Prototype Definition: bootloader_init_image --------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  -- > memory content in 'neorv32_bootloader_image.vhd', auto-generated by 'image_gen'
+  -- > used by 'neorv32_boot_rom.vhd'
+  -- > enables body-only recompile in case of firmware change (NEORV32 PR #338)
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+library neorv32;
+use neorv32.neorv32_package.all;
+
+package neorv32_bootloader_image is
+  constant bootloader_init_image : mem32_t;
+end neorv32_bootloader_image;
+
+
+  -- Prototype Definition: neorv32_application_image ----------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  -- > memory content in 'neorv32_application_image.vhd', auto-generated by 'image_gen'
+  -- > used by 'mem/neorv32_imem.*.vhd'
+  -- > enables body-only recompile in case of firmware change (NEORV32 PR #338)
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+library neorv32;
+use neorv32.neorv32_package.all;
+
+package neorv32_application_image is
+  constant application_init_image : mem32_t;
+end neorv32_application_image;

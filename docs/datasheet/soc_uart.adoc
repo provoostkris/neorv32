@@ -30,10 +30,12 @@ independently.
 The UART features two memory-mapped registers `CTRL` and `DATA`, which are used for configuration, status
 check and data transfer.
 
+.Standard Console(s)
 [NOTE]
-Please note that ALL default example programs and software libraries of the NEORV32 software
+Please note that _all_ default example programs and software libraries of the NEORV32 software
 framework (including the bootloader and the runtime environment) use the primary UART
-(_UART0_) as default user console interface.
+(_UART0_) as default user console interface. Furthermore, UART0 is used to implement all the standard
+input, output and error consoles (`STDIN`, `STDOUT` and `STDERR`).
 
 
 **Theory of Operation**
@@ -88,10 +90,12 @@ UART0 supports optional hardware flow control using the standard CTS (clear to s
 / ready to receive "RTR") signals. Both hardware control flow mechanisms can be enabled individually.
 
 * If **RTS hardware flow control** is enabled by setting the _UART_CTRL_RTS_EN_ control register flag, the UART
-will pull the `uart0_rts_o` signal low if the UART's receiver is ready to receive new data.
-As long as this signal is low the connected device can send new data. `uart0_rts_o` is always LOW if the UART is disabled.
-The RTS line is de-asserted (going high) as soon as the start bit of a new incoming char has been
-detected.
+will drive the `uart0_rts_o` signal low if the UART RX FIFO is less than half full. As long as this signal is low,
+the connected device can send new data. `uart0_rts_o` is always low if the UART is disabled.
+
+[WARNING]
+If the _UART0_RX_FIFO_ configuration generic is set to it's minimum (=1), the RTS signal already goes low
+when a single character has been received by the UART that has not yet been read by the software.
 
 * If **CTS hardware flow control** is enabled by setting the _UART_CTRL_CTS_EN_ control register flag, the UART's
 transmitter will not start sending a new data until the `uart0_cts_i` signal goes low. During this time, the UART busy flag
@@ -127,8 +131,8 @@ the RX FIFO _becomes_ at least half-full (-> _UART_CTRL_RX_HALF_ sets).
 in the TX FIFO _becomes_ free (-> _UART_CTRL_TX_FULL_ clears). If _UART_CTRL_TX_IRQ_ is `1` the TX interrupt goes pending
 when the RX FIFO _becomes_ less than half-full (-> _UART_CTRL_TX_HALF_ clears).
 
-Once the RX or TX interrupt has become pending, it has to be explicitly cleared again by setting the
-according `mip` CSR bit.
+Once the RX or TX interrupt has become pending, it has to be explicitly cleared again by
+writing zero to the according <<_mip>> CSR bit.
 
 
 **Simulation Mode**
@@ -153,6 +157,8 @@ second text file `neorv32.uart0.sim_mode.data.out` also located in the simulatio
 More information regarding the simulation-mode of the UART0 can be found in the User Guide
 section https://stnolting.github.io/neorv32/ug/#_simulating_the_processor[Simulating the Processor].
 
+
+**Register Map**
 
 .UART0 register map (`struct NEORV32_UART0`)
 [cols="<6,<7,<10,^2,<18"]
@@ -228,6 +234,8 @@ output data is written to UART1-specific files: `neorv32.uart1.sim_mode.text.out
 plain ASCII text and `neorv32.uart1.sim_mode.data.out` is used to store full 32-bit hexadecimal
 data words.
 
+
+**Register Map**
 
 .UART1 register map (`struct NEORV32_UART1`)
 [cols="<6,<7,<10,^2,<18"]
