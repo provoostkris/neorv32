@@ -5,37 +5,65 @@
 [cols="<3,<3,<4"]
 [frame="topbot",grid="none"]
 |=======================
-| Hardware source file(s): | neorv32_twi.vhd | 
-| Software driver file(s): | neorv32_twi.c |
-|                          | neorv32_twi.h |
-| Top entity port:         | `twi_sda_io` | 1-bit bi-directional serial data
-|                          | `twi_scl_io` | 1-bit bi-directional serial clock
-| Configuration generics:  | _IO_TWI_EN_ | implement TWI controller when _true_
-| CPU interrupts:          | fast IRQ channel 7 | transmission done interrupt (see <<_processor_interrupts>>)
+| Hardware source files:  | neorv32_twi.vhd    |
+| Software driver files:  | neorv32_twi.c      |
+|                         | neorv32_twi.h      |
+| Top entity ports:       | `twi_sda_i`        | 1-bit serial data line sense input
+|                         | `twi_sda_o`        | 1-bit serial data line output (pull low only)
+|                         | `twi_scl_i`        | 1-bit serial clock line sense input
+|                         | `twi_scl_o`        | 1-bit serial clock line output (pull low only)
+| Configuration generics: | `IO_TWI_EN`        | implement TWI controller when `true`
+|                         | `IO_TWI_FIFO`      | FIFO depth, has to be a power of two, min 1
+| CPU interrupts:         | fast IRQ channel 7 | FIFO empty and module idle interrupt (see <<_processor_interrupts>>)
+| Access restrictions:  2+| non-32-bit write accesses are ignored
 |=======================
 
 
-**Theory of Operation**
+**Overview**
 
-The two wire interface - also called "I²C" - is a quite famous interface for connecting several on-board
-components. Since this interface only needs two signals (the serial data line `twi_sda_io` and the serial
-clock line `twi_scl_io`) for an arbitrarily number of devices it allows easy interconnections of
-several peripheral nodes.
+The NEORV32 TWI implements a I²C-compatible host controller to communicate with arbitrary I2C-devices.
+Note that peripheral-mode (controller acts as a device) and multi-controller mode are not supported yet.
 
-The NEORV32 TWI implements a **TWI controller**. Currently, **no multi-controller
-support** is available. Furthermore, the NEORV32 TWI unit cannot operate in peripheral mode.
+.Host-Mode Only
+[NOTE]
+The NEORV32 TWI controller only supports **host mode**. Transmission are initiated by the processor's TWI controller
+and not by an external I²C module. If you are looking for a _device-mode_ module (transactions
+initiated by an external host) check out the <<_two_wire_serial_device_controller_twd>>.
 
-[IMPORTANT]
-The serial clock (SCL) and the serial data (SDA) lines can only be actively driven low by the
-controller. Hence, external pull-up resistors are required for these lines.
+Key features:
+
+* Programmable clock speed
+* Optional clock stretching
+* Generate START / repeated-START and STOP conditions
+* Sending & receiving 8 data bits including ACK/NACK
+* Generating a host-ACK (ACK send by the TWI controller)
+* Configurable data/command FIFO to "program" large I²C sequences without further involvement of the CPU
+
+The TWI controller provides two memory-mapped registers that are used for configuring the module and
+for triggering operations: the control and status register `CTRL` and the command and data register `DCMD`.
+
+
+**Tristate Drivers**
+
+The TWI module requires two tristate drivers (actually: open-drain drivers - signals can only be actively driven low) for
+the SDA and SCL lines, which have to be implemented by the user in the setup's top module / IO ring. A generic VHDL example
+is shown below (here, `sda_io` and `scl_io` are the actual I²C bus lines, which are of type `std_logic`).
+
+.TWI VHDL Tristate Driver Example
+[source,VHDL]
+----
+sda_io    <= '0' when (twi_sda_o = '0') else 'Z'; -- drive
+scl_io    <= '0' when (twi_scl_o = '0') else 'Z'; -- drive
+twi_sda_i <= std_ulogic(sda_io); -- sense
+twi_scl_i <= std_ulogic(scl_io); -- sense
+----
 
 
 **TWI Clock Speed**
 
-The TWI clock frequency is programmed by the 3-bit _TWI_CTRL_PRSCx_ clock prescaler for a coarse selection
-and a 4-bit clock divider _TWI_CTRL_CDIVx_ for a fine selection.
-
-The following pre-scalers (_TWI_CTRL_PRSCx_) are available:
+The TWI clock frequency is programmed by two bit-fields in the device's control register `CTRL`: a 3-bit clock prescaler
+(`TWI_CTRL_PRSCx`) is used for a coarse clock configuration and a 4-bit clock divider (`TWI_CTRL_CDIVx`) is used for a fine
+clock configuration.
 
 .TWI prescaler configuration
 [cols="<4,^1,^1,^1,^1,^1,^1,^1,^1"]
@@ -45,71 +73,50 @@ The following pre-scalers (_TWI_CTRL_PRSCx_) are available:
 | Resulting `clock_prescaler` |       2 |       4 |       8 |      64 |     128 |    1024 |    2048 |    4096
 |=======================
 
-Based on the _TWI_CTRL_PRSCx_ and _TWI_CTRL_CDIVx_ configuration, the actual TWI clock frequency f~SCL~ is derived
+Based on the clock configuration, the actual TWI clock frequency f~SCL~ is derived
 from the processor's main clock f~main~ according to the following equation:
 
 _**f~SCL~**_ = _f~main~[Hz]_ / (4 * `clock_prescaler` * (1 + TWI_CTRL_CDIV))
 
 Hence, the maximum TWI clock is f~main~ / 8 and the lowest TWI clock is f~main~ / 262144. The generated TWI clock is
-always symmetric having a duty cycle of exactly 50%. However, an accessed peripheral can "slow down" the bus clock
-by using **clock stretching** (= actively driving the SCL line low). The controller will pause operation in this case
-if clock stretching is enabled via the _TWI_CTRL_CSEN_ bit of the unit's control register `CTRL`
+always symmetric having a duty cycle of exactly 50% (if the clock is not haled by a device during clock stretching).
+
+.Clock Stretching
+[NOTE]
+An accessed peripheral can slow down/halt the controller's bus clock by using clock stretching (= actively keeping the
+SCL line low). The controller will halt operation in this case. Clock stretching is enabled by setting the
+`TWI_CTRL_CLKSTR` bit in the module's control register `CTRL`.
 
 
 **TWI Transfers**
 
-The TWI is enabled via the _TWI_CTRL_EN_ bit in the `CTRL` control register. The user program can start / stop a
-transmission by issuing a START or STOP condition. These conditions are generated by setting the
-according bits (_TWI_CTRL_START_ or _TWI_CTRL_STOP_) in the control register.
+The TWI is enabled via the `TWI_CTRL_EN` bit in the `CTRL` control register. All TWI operations are controlled by
+the `DCMD` register. The actual operation is selected by a 2-bit value that is written to the register's `TWI_DCMD_CMD_*`
+bit-field:
 
-Data is transferred via the TWI bus by writing a byte to the `DATA` register. The written byte is send via the TWI bus
-and the received byte from the bus is also available in this register after the transmission is completed. 
+* `00`: NOP (no-operation); all further bit-fields in `DCMD` are ignored
+* `01`: Generate a (repeated) START conditions; all further bit-fields in `DCMD` are ignored
+* `10`: Generate a STOP conditions; all further bit-fields in `DCMD` are ignored
+* `11`: Trigger a data transmission; the data to be send has to be written to the register's `TWI_DCMD_MSB : TWI_DCMD_LSB`
+bit-field; if `TWI_DCMD_ACK` is set the controller will send a host-ACK in the ACK/NACK time slot; after the transmission
+is completed `TWI_DCMD_MSB : TWI_DCMD_LSB` contains the RX data and `TWI_DCMD_ACK` the device's response if no host-ACK was
+configured (`0` = ACK, `1` = ACK)
 
-The TWI operation (transmitting data or performing a START or STOP condition) is in progress as long as the
-control register's _TWI_CTRL_BUSY_ bit is set.
+All operations/data written to the `DCMD` register are buffered by a configurable data/command FIFO. The depth of the FIFO is
+configured by the `IO_TWI_FIFO` top generic. Software can retrieve this size by reading the control register's `TWI_CTRL_FIFO` bits.
 
+The command/data FIFO is internally split into a TX FIFO and a RX FIFO. Writing to `DCMD` will write to the TX FIFO while reading from
+`DCMD` will read from the RX FIFO. The TX FIFO is full when the `TWI_CTRL_TX_FULL` flag is set. Accordingly, the RX FIFO contains valid
+data when the `TWI_CTRL_RX_AVAIL` flag is set.
 
-**TWI ACK/NACK and MACK**
-
-An accessed TWI peripheral has to acknowledge each transferred byte. When the _TWI_CTRL_ACK_ bit is set after a
-completed transmission the accessed peripheral has send an _acknowledge_. If this bit is cleared after a completed
-transmission, the peripheral has send a _not-acknowledge_ (NACK).
-
-The NEORV32 TWI controller can also send an ACK generated by itself ("controller acknowledge _MACK_") right after
-transmitting a byte by driving SDA low during the ACK time slot. Some TWI modules require this MACK to acknowledge
-certain data movement operations.
-
-The control register's _TWI_CTRL_MACK_ bit has to be set to make the TWI module automatically generate a MACK after
-the byte transmission has been completed. If this bit is cleared, the ACK/NACK generated by the peripheral is sampled
-in this time slot instead (normal mode).
-
-
-**TWI Bus Status**
-
-The TWI controller can check if the TWI bus is currently claimed (SCL and SDA both low). The bus can be claimed by the
-NEORV32 TWI itself or by any other controller. Bit _TWI_CTRL_CLAIMED_ of the control register will be set if the bus
-is currently claimed.
-
-
-**Summary**
-
-In summary, a complete TWI transfer is based on the following elementary operation:
-
-[start=1]
-. generate START condition by setting _TWI_CTRL_START_
-. wait until _TWI_CTRL_BUSY_ has cleared (start condition completed)
-. transfer one byte while also sampling one byte from the bus (this also samples ACK/NACK or generates a
-controller ACK "MACK" if _TWI_CTRL_MACK_ is set) by writing data to `NEORV32_TWI.DATA`; this step can be repeated to
-send/receive an arbitrary number of bytes
-. wait until _TWI_CTRL_BUSY_ has cleared (data transfer completed)
-. optionally generate another START condition (as REPEATED-START condition) by setting _TWI_CTRL_START_ again
-. wait until _TWI_CTRL_BUSY_ has cleared (repeated-start condition completed)
-. generate STOP condition by setting _TWI_CTRL_STOP_
-. wait until _TWI_CTRL_BUSY_ has cleared (stop condition completed)
+The control register's busy flag `TWI_CTRL_BUSY` is set as long as the TX FIFO contains valid data (i.e. programmed TWI operations
+that have not been executed yet) or of the TWI bus engine is still processing an operation.
 
 [TIP]
-A transmission can be terminated at any time by disabling the TWI module
-by clearing the _TWI_CTRL_EN_ control register bit. This will also reset the whole module.
+An active transmission can be terminated at any time by disabling the TWI module. This will also clear the data/command FIFO.
+
+[TIP]
+The current state of the I²C bus lines (SCL and SDA) can be checked by software via the `TWI_CTRL_SENSE_*` control register bits.
 
 [NOTE]
 When reading data from a device, an all-one byte (`0xFF`) has to be written to TWI data register `NEORV32_TWI.DATA`
@@ -118,29 +125,30 @@ so the accessed device can actively pull-down SDA when required.
 
 **TWI Interrupt**
 
-The TWI module provides a single interrupt to signal "transmission done" to the CPU. Whenever the TWI
-module completes the current transmission of one byte the interrupt is triggered. Note the the interrupt
-is **not** triggered when completing a START or STOP condition. Once triggered, the interrupt has to be
-explicitly cleared again by writing zero to the according <<_mip>> CSR bit.
+The TWI module provides a single interrupt to signal "idle condition" to the CPU. The interrupt becomes active when the
+TWI module is enabled (`TWI_CTRL_EN` = `1`) and the TX FIFO is empty and the TWI bus engine is idle.
 
 
 **Register Map**
 
 .TWI register map (`struct NEORV32_TWI`)
-[cols="<2,<2,<4,^1,<7"]
+[cols="<2,<1,<4,^1,<7"]
 [options="header",grid="all"]
 |=======================
 | Address | Name [C] | Bit(s), Name [C] | R/W | Function
-.10+<| `0xffffffb0` .10+<| `NEORV32_TWI.CTRL` <|`0`     _TWI_CTRL_EN_                       ^| r/w <| TWI enable, reset if cleared
-                                              <|`1`     _TWI_CTRL_START_                    ^| -/w <| generate START condition, auto-clears
-                                              <|`2`     _TWI_CTRL_STOP_                     ^| -/w <| generate STOP condition, auto-clears
-                                              <|`3`     _TWI_CTRL_MACK_                     ^| r/w <| generate controller-ACK for each transmission ("MACK")
-                                              <|`4`     _TWI_CTRL_CSEN_                     ^| r/w <| allow clock stretching when set
-                                              <|`7:5`   _TWI_CTRL_PRSC2_ : _TWI_CTRL_PRSC0_ ^| r/w <| 3-bit clock prescaler select
-                                              <|`11:8`  _TWI_CTRL_CDIV3_ : _TWI_CTRL_CDIV0_ ^| r/w <| 4-bit clock divider
-                                              <|`28:12` -                                   ^| r/- <| _reserved_, read as zero
-                                              <|`29`    _TWI_CTRL_CLAIMED_                  ^| r/- <| set if the TWI bus is claimed by any controller
-                                              <|`30`    _TWI_CTRL_ACK_                      ^| r/- <| ACK received when set, NACK received when cleared
-                                              <|`31`    _TWI_CTRL_BUSY_                     ^| r/- <| transfer/START/STOP in progress when set
-| `0xffffffb4` | `NEORV32_TWI.DATA` |`7:0` _TWI_DATA_MSB_ : _TWI_DATA_LSB_ | r/w | receive/transmit data
+.12+<| `0xfff90000` .12+<| `CTRL` <|`0`     `TWI_CTRL_EN`                           ^| r/w <| TWI enable, reset if cleared
+                                  <|`3:1`   `TWI_CTRL_PRSC2 : TWI_CTRL_PRSC0`       ^| r/w <| 3-bit clock prescaler select
+                                  <|`7:4`   `TWI_CTRL_CDIV3 : TWI_CTRL_CDIV0`       ^| r/w <| 4-bit clock divider
+                                  <|`8`     `TWI_CTRL_CLKSTR`                       ^| r/w <| Enable (allow) clock stretching
+                                  <|`14:9`   -                                      ^| r/- <| _reserved_, read as zero
+                                  <|`18:15` `TWI_CTRL_FIFO_MSB : TWI_CTRL_FIFO_LSB` ^| r/- <| FIFO depth; log2(`IO_TWI_FIFO`)
+                                  <|`26:12`  -                                      ^| r/- <| _reserved_, read as zero
+                                  <|`27`    `TWI_CTRL_SENSE_SCL`                    ^| r/- <| current state of the SCL bus line
+                                  <|`28`    `TWI_CTRL_SENSE_SDA`                    ^| r/- <| current state of the SDA bus line
+                                  <|`29`    `TWI_CTRL_TX_FULL`                      ^| r/- <| set if the TWI bus is claimed by any controller
+                                  <|`30`    `TWI_CTRL_RX_AVAIL`                     ^| r/- <| RX FIFO data available
+                                  <|`31`    `TWI_CTRL_BUSY`                         ^| r/- <| TWI bus engine busy or TX FIFO not empty
+.3+<| `0xfff90004` .3+<| `DCMD`   <|`7:0`   `TWI_DCMD_MSB : TWI_DCMD_LSB`           ^| r/w <| RX/TX data byte
+                                  <|`8`     `TWI_DCMD_ACK`                          ^| r/w <| write: ACK bit sent by controller; read: `1` = device NACK, `0` = device ACK
+                                  <|`10:9`  `TWI_DCMD_CMD_HI : TWI_DCMD_CMD_LO`     ^| r/w <| TWI operation (`00` = NOP, `01` = START conditions, `10` = STOP condition, `11` = data transmission)
 |=======================

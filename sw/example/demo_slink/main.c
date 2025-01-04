@@ -1,36 +1,10 @@
-// #################################################################################################
-// # << NEORV32 - SLINK Demo Program >>                                                            #
-// # ********************************************************************************************* #
-// # BSD 3-Clause License                                                                          #
-// #                                                                                               #
-// # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
-// #                                                                                               #
-// # Redistribution and use in source and binary forms, with or without modification, are          #
-// # permitted provided that the following conditions are met:                                     #
-// #                                                                                               #
-// # 1. Redistributions of source code must retain the above copyright notice, this list of        #
-// #    conditions and the following disclaimer.                                                   #
-// #                                                                                               #
-// # 2. Redistributions in binary form must reproduce the above copyright notice, this list of     #
-// #    conditions and the following disclaimer in the documentation and/or other materials        #
-// #    provided with the distribution.                                                            #
-// #                                                                                               #
-// # 3. Neither the name of the copyright holder nor the names of its contributors may be used to  #
-// #    endorse or promote products derived from this software without specific prior written      #
-// #    permission.                                                                                #
-// #                                                                                               #
-// # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS   #
-// # OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF               #
-// # MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE    #
-// # COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,     #
-// # EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE #
-// # GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED    #
-// # AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING     #
-// # NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED  #
-// # OF THE POSSIBILITY OF SUCH DAMAGE.                                                            #
-// # ********************************************************************************************* #
-// # The NEORV32 Processor - https://github.com/stnolting/neorv32              (c) Stephan Nolting #
-// #################################################################################################
+// ================================================================================ //
+// The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
+// Copyright (c) NEORV32 contributors.                                              //
+// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Licensed under the BSD-3-Clause license, see LICENSE for details.                //
+// SPDX-License-Identifier: BSD-3-Clause                                            //
+// ================================================================================ //
 
 
 /**********************************************************************//**
@@ -51,9 +25,7 @@
 /**@}*/
 
 // Prototypes
-void slink_rx_firq_handler(void);
-void slink_tx_firq_handler(void);
-uint32_t xorshift32(void);
+void slink_firq_handler(void);
 
 
 /**********************************************************************//**
@@ -65,15 +37,15 @@ uint32_t xorshift32(void);
  **************************************************************************/
 int main() {
 
-  int i;
+  int i, slink_rc;
   uint32_t slink_data;
-  int slink_status;
+
 
   // capture all exceptions and give debug info via UART0
   neorv32_rte_setup();
 
-  // init UART0 at default baud rate, no parity bits, no hw flow control
-  neorv32_uart0_setup(BAUD_RATE, PARITY_NONE, FLOW_CONTROL_NONE);
+  // setup UART at default baud rate, no interrupts
+  neorv32_uart0_setup(BAUD_RATE, 0);
 
   // check if UART0 unit is implemented at all
   if (neorv32_uart0_available() == 0) {
@@ -90,71 +62,89 @@ int main() {
     return -1;
   }
 
-
-  // show SLINK hardware configuration
-  neorv32_uart0_printf("# SLINK RX channels: %u (%u FIFO entries each)\n"
-                       "# SLINK TX channels: %u (%u FIFO entries each)\n",
-                       neorv32_slink_get_link_num(0),
-                       neorv32_slink_get_fifo_depth(0),
-                       neorv32_slink_get_link_num(1),
-                       neorv32_slink_get_fifo_depth(1));
-
-  neorv32_uart0_printf("\nNOTE: This demo program uses SLINK RX/TX channels 0 only.\n\n");
+  // show SLINK FIFO configuration
+  int rx_depth = neorv32_slink_get_rx_fifo_depth();
+  int tx_depth = neorv32_slink_get_tx_fifo_depth();
+  neorv32_uart0_printf("RX FIFO depth: %u\n"
+                       "TX FIFO depth: %u\n\n",
+                       rx_depth, tx_depth);
 
 
-  // reset and enable SLINK module
-  neorv32_slink_setup((0b10 << (SLINK_IRQ_RX_LSB + 2*0)) | // RX link 0: IRQ if FIFO becomes not empty
-                      (0b11 << (SLINK_IRQ_TX_LSB + 2*0))); // TX link 0: IRQ if FIFO becomes less than half full
+  // setup SLINK module, no interrupts
+  neorv32_slink_setup(0, 0);
 
 
-  // NEORV32 runtime environment: install SLINK FIRQ handlers
-  neorv32_rte_exception_install(SLINK_RX_RTE_ID, slink_rx_firq_handler);
-  neorv32_rte_exception_install(SLINK_TX_RTE_ID, slink_tx_firq_handler);
-  neorv32_cpu_irq_enable(SLINK_RX_FIRQ_ENABLE); // enable SLINK RX FIRQ
-  neorv32_cpu_irq_enable(SLINK_TX_FIRQ_ENABLE); // enable SLINK RX FIRQ
-  neorv32_cpu_eint(); // enable global interrupt flag
-
-
-  // do some demo transmissions
+  // TX demo
   neorv32_uart0_printf("-------- TX Demo --------\n");
 
-  for (i=0; i<6; i++) { // try to send 6 data words
-    slink_data = xorshift32();
-    neorv32_uart0_printf("%i: SLINK TX 0x%x via link 0... ", i, slink_data);
+  for (i=0; i<(rx_depth+tx_depth); i++) {
+    slink_data = neorv32_aux_xorshift32();
+    neorv32_uart0_printf("[%i] Sending 0x%x... ", i, slink_data);
 
-    if (i == 3) {
-      neorv32_uart0_printf("[set END-OF-PACKET] ");
-      slink_status = neorv32_slink_tx(0, slink_data, 1); // do a "end of packet" transmission (set LST high)
+    slink_rc = neorv32_slink_tx_status();
+    if (slink_rc == SLINK_FIFO_FULL) {
+      neorv32_uart0_printf("ERROR! TX FIFO full!\n");
+      break;
     }
     else {
-      slink_status = neorv32_slink_tx(0, slink_data, 0); // "normal" transmission
-    }
-
-    if (slink_status == 0) { // successful?
+      if (i == ((rx_depth+tx_depth)-1)) { // very last transmission?
+        neorv32_slink_put_last(slink_data); // set tlast
+        neorv32_uart0_printf("(last) ");
+      }
+      else {
+        neorv32_slink_put(slink_data);
+      }
       neorv32_uart0_printf("ok\n");
-    }
-    else {
-      neorv32_uart0_printf("fail; FIFO full\n");
     }
   }
 
 
-  // check the RX link
+  // RX demo
   neorv32_uart0_printf("\n-------- RX Demo --------\n");
 
-  for (i=0; i<6; i++) { // try to read 6 data words
-    slink_data = 0;
-    neorv32_uart0_printf("%i: SLINK RX link 0... ", i);
+  for (i=0; i<(rx_depth+tx_depth+1); i++) {
+    neorv32_uart0_printf("[%i] Reading RX data... ", i);
 
-    slink_status = neorv32_slink_rx(0, &slink_data);
-    if (slink_status == 0) {
-      neorv32_uart0_printf("received 0x%x\n", slink_data);
+    slink_rc = neorv32_slink_rx_status();
+    if (slink_rc == SLINK_FIFO_EMPTY) {
+      neorv32_uart0_printf("ERROR! RX FIFO empty!\n");
+      break;
     }
-    else if (slink_status == 1) {
-      neorv32_uart0_printf("received 0x%x [END-OF-PACKET]\n", slink_data);
+    else {
+      neorv32_uart0_printf("0x%x", neorv32_slink_get());
+      if (neorv32_slink_check_last()) {
+        neorv32_uart0_printf(" (LAST)");
+      }
+      neorv32_uart0_printf("\n");
     }
-    else { // == -1
-      neorv32_uart0_printf("no data available\n");
+  }
+
+
+  // IRQ demo
+  neorv32_uart0_printf("\n------ RX IRQ Demo -------\n");
+
+  // reconfigure SLINK module
+  neorv32_slink_setup(1 << SLINK_CTRL_IRQ_RX_NEMPTY, 0); // interrupt if RX data available
+  neorv32_slink_rx_clear();
+  neorv32_slink_tx_clear();
+
+  // NEORV32 runtime environment: install SLINK FIRQ handler
+  neorv32_rte_handler_install(SLINK_RX_RTE_ID, slink_firq_handler);
+  neorv32_cpu_csr_set(CSR_MIE, 1 << SLINK_RX_FIRQ_ENABLE); // enable SLINK FIRQ
+  neorv32_cpu_csr_set(CSR_MSTATUS, 1 << CSR_MSTATUS_MIE); // enable machine-mode interrupts
+
+  for (i=0; i<4; i++) {
+    slink_data = neorv32_aux_xorshift32();
+    neorv32_uart0_printf("[%i] Sending 0x%x... ", i, slink_data);
+
+    slink_rc = neorv32_slink_tx_status();
+    if (slink_rc == SLINK_FIFO_FULL) {
+      neorv32_uart0_printf("FAILED! TX FIFO full!\n");
+      break;
+    }
+    else {
+      neorv32_slink_put(slink_data);
+      neorv32_uart0_printf("ok\n");
     }
   }
 
@@ -164,39 +154,9 @@ int main() {
 
 
 /**********************************************************************//**
- * SLINK RX interrupt handler.
+ * SLINK interrupt handler.
  **************************************************************************/
-void slink_rx_firq_handler(void) {
+void slink_firq_handler(void) {
 
-  neorv32_cpu_csr_write(CSR_MIP, ~(1 << SLINK_RX_FIRQ_PENDING)); // ack FIRQ
-
-  neorv32_uart0_printf(" <<SLINK RX IRQ!>> ");
-}
-
-
-/**********************************************************************//**
- * SLINK TX interrupt handler.
- **************************************************************************/
-void slink_tx_firq_handler(void) {
-
-  neorv32_cpu_csr_write(CSR_MIP, ~(1 << SLINK_TX_FIRQ_PENDING)); // ack FIRQ
-
-  neorv32_uart0_printf(" <<SLINK TX IRQ!>> ");
-}
-
-
-/**********************************************************************//**
- * Simple pseudo random number generator.
- *
- * @return Random number.
- **************************************************************************/
-uint32_t xorshift32(void) {
-
-  static uint32_t x32 = 314159265;
-
-  x32 ^= x32 << 13;
-  x32 ^= x32 >> 17;
-  x32 ^= x32 << 5;
-
-  return x32;
+  neorv32_uart0_printf(" <<RX data: 0x%x>> ", neorv32_slink_get());
 }

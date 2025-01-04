@@ -34,12 +34,13 @@ following parameters:
 * 1 stop bit
 * no parity bits
 * _no_ transmission/flow control protocol
-* receiver (host computer) newline on `\r\n` (carriage return & newline)
+* newline on `\r\n` (carriage return **and** line feed)
 
 [start=4]
 . Also make sure that single chars are send from your computer _without_ any consecutive "new line" or "carriage
-return" commands (this is highly dependent on your terminal application of choice, TeraTerm only
-sends the raw chars by default).
+return" commands. This is highly dependent on your terminal application of choice, TeraTerm only
+sends the raw chars by default. In `cutecom`, change `LF` to `None` in the drop-down menu
+next to the input text box.
 . Press the NEORV32 reset button to restart the bootloader. The status LED starts blinking and the
 bootloader intro screen appears in your console. Hurry up and press any key (hit space!) to abort the
 automatic boot sequence and to start the actual bootloader user interface console.
@@ -49,23 +50,26 @@ automatic boot sequence and to start the actual bootloader user interface consol
 ----
 << NEORV32 Bootloader >>
 
-BLDV: Feb 16 2022
-HWV:  0x01060709
+BLDV: Mar  7 2023
+HWV:  0x01080107
+CID:  0x00000000
 CLK:  0x05f5e100
-ISA:  0x40901107 + 0xc000068b
-SOC:  0x7b7f402f
-IMEM: 0x00008000 bytes @0x00000000
-DMEM: 0x00004000 bytes @0x80000000
+MISA: 0x40901106
+XISA: 0xc0000fab
+SOC:  0xffff402f
+IMEM: 0x00008000
+DMEM: 0x00002000
 
-Autoboot in 8s. Press any key to abort.
+Autoboot in 10s. Press any key to abort.
 Aborted.
 
-Available commands:
+Available CMDs:
  h: Help
  r: Restart
  u: Upload
  s: Store to flash
  l: Load from flash
+ x: Boot from flash (XIP)
  e: Execute
 CMD:>
 ----
@@ -84,6 +88,10 @@ Awaiting neorv32_exe.bin...
 . Again, make sure to transmit the executable in raw binary mode (no transfer protocol).
 When using TeraTerm, select the "binary" option in the send file dialog.
 . If everything went fine, OK will appear in your terminal:
+
+[IMPORTANT]
+Make sure to upload the NEORV32 executable `neorv32_exe.bin`. Uploading any other file (like `main.bin`)
+will cause an `ERR_EXE` bootloader error (see https://stnolting.github.io/neorv32/#_bootloader_error_codes).
 
 [source,bash]
 ----

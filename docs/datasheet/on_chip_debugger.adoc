@@ -2,64 +2,60 @@
 :sectnums:
 == On-Chip Debugger (OCD)
 
-The NEORV32 Processor features an _on-chip debugger_ (OCD) implementing **execution-based debugging** that is compatible
-to the **Minimal RISC-V Debug Specification Version 0.13.2**. Please refer to this spec for in-deep information.
-A copy of the specification is available in `docs/references/riscv-debug-release.pdf`.
+The NEORV32 Processor features an _on-chip debugger_ (OCD) compatible to the **Minimal RISC-V Debug Specification**
+implementing the **execution-based debugging** scheme. A copy of the specification is available in `docs/references`.
+The on-chip debugger is implemented if the <<_processor_top_entity_generics, `OCD_EN`>> processor top generic is set
+to `true`.
 
-The NEORV32 OCD provides the following key features:
+**Key Features**
 
-* JTAG access port
-* run-control of the CPU: halting, single-stepping and resuming
-* executing arbitrary programs during debugging
-* accessing core registers
-* indirect access to the whole processor address space (via program buffer)
-* trigger module for hardware breakpoints
-* compatible with upstream OpenOCD
-
-.OCD Security Note
-[NOTE]
-Access via the OCD is _always authenticated_ (`dmstatus.authenticated` == `1`). Hence, the
-_whole system_ can always be accessed via the on-chip debugger. Currently, there is no option
-to disable the OCD via software. The OCD can only be disabled by disabling implementation
-(setting _ON_CHIP_DEBUGGER_EN_ generic to _false_).
+* standard 4-wire JTAG access port
+* debugging of up to 4 CPU cores ("harts")
+* full control of the CPU: halting, single-stepping and resuming
+* indirect access to all core registers and the entire processor address space (via program buffer)
+* execution of arbitrary programs via the program buffer
+* compatible with upstream OpenOCD and GDB
+* optional trigger module for hardware breakpoints
+* optional authentication for increased security
 
 .Hands-On Tutorial
 [TIP]
-A simple example on how to use NEORV32 on-chip debugger in combination with OpenOCD and the GNU debugger
-is shown in section https://stnolting.github.io/neorv32/ug/#_debugging_using_the_on_chip_debugger[Debugging using the On-Chip Debugger]
+A simple example on how to use NEORV32 on-chip debugger in combination with OpenOCD and the GNU debugger is shown in
+section https://stnolting.github.io/neorv32/ug/#_debugging_using_the_on_chip_debugger[Debugging using the On-Chip Debugger]
 of the User Guide.
 
-The NEORV32 on-chip debugger complex is based on four hardware modules:
+**Overview**
 
 .NEORV32 on-chip debugger complex
 image::neorv32_ocd_complex.png[align=center]
 
+The NEORV32 on-chip debugger is based on five hardware modules:
+
 [start=1]
-. <<_debug_transport_module_dtm>> (`rtl/core/neorv32_debug_dtm.vhd`): External JTAG access tap to allow an external
-  adapter to interface with the _debug module(DM)_ using the _debug module interface (dmi)_.
-. <<_debug_module_dm>> (`rtl/core/neorv32_debug_tm.vhd`): Debugger control unit that is configured by the DTM via the
-  the _dmi_. Form the CPU's "point of view" this module behaves as a memory-mapped "peripheral" that can be accessed
-  via the processor-internal bus. The memory-mapped registers provide an internal _data buffer_ for data transfer
-  from/to the DM, a _code ROM_ containing the "park loop" code,   a _program buffer_ to allow the debugger to
-  execute small programs defined by the DM and a _status register_ that is used to communicate
-  _halt_, _resume_ and _execute_ requests/acknowledges from/to the DM.
-. CPU <<_cpu_debug_mode>> extension (part of`rtl/core/neorv32_cpu_control.vhd`):
-  This extension provides the "debug execution mode" which executes the "park loop" code from the DM.
-  The mode also provides additional CSRs.
-. (CPU <<_trigger_module>> (also part of`rtl/core/neorv32_cpu_control.vhd`):
-  This module provides a single _hardware_ breakpoint, which allows to debug code executed from ROM.)
+. <<_debug_transport_module_dtm>>: JTAG access tap to allow an external adapter to interface with the _debug module (DM)_.
+. <<_debug_module_dm>>: The RISC-V debug module is the main bridge between the external debugger and the processor being
+debugged. It provides a _data buffer_ for data transfer from/to the DM, a _code ROM_ containing the "park loop" code, a
+_program buffer_ to allow the debugger to execute small programs defined by the DM and a _status register_ that is used
+to communicate _exception_, _halt_, _resume_ and _execute_ requests/acknowledges between the debugger and the CPU.
+. <<_debug_authentication>>: Authenticator module to secure on-chip debugger access. By default this module implements a
+very simple authentication mechanism as example. Users can modify/replace this default logic to implement arbitrary
+authentication mechanism.
+. <<_cpu_debug_mode>> ISA extension: This ISA extension provides the "debug execution mode" as another CPU operation mode
+that is used to execute the park loop code from the DM. This mode also provides additional CSRs and instructions.
+. CPU <<_trigger_module>>: This module provides a single _hardware breakpoint_.
 
 **Theory of Operation**
 
-When debugging the system using the OCD, the debugger issues a halt request to the CPU (via the CPU's
-`db_halt_req_i` signal) to make the CPU enter _debug mode_. In this state, the application-defined architectural
-state of the system/CPU is "frozen" so the debugger can monitor and even modify it.
-While in debug mode, the CPU executes the "park loop" code from the _code ROM_ of the DM.
-This park loop implements an endless loop, in which the CPU polls the memory-mapped _status register_ that is
-controlled by the _debug module (DM)_. The flags of these register are used to communicate _requests_ from
-the DM and to _acknowledge_ them by the CPU: trigger execution of the program buffer or resume the halted
-application.
+When debugging the system using the OCD, the external debugger (e.g. GDB) issues a halt request to the CPU to make it
+enter so-called _debug mode_. In this mode the application-defined architectural state of the system/CPU is "frozen" so
+the debugger can monitor it without interfering with the actual application. However, the OCD can also modify the entire
+architectural state at any time. While in debug mode, the debugger has full control over the entire CPU core.
 
+After halting, the CPU executes the "park loop" code from the code ROM of the debug module (DM). This park loop implements
+an endless loop that is used to poll a memory-mapped <<_status_register>> of the DM. The flags in this register are used to
+communicate requests from the DM and to acknowledge their processing them by the CPU: trigger execution of the program buffer
+or resume the halted application. Furthermore, the CPU uses this register to signal that the CPU has halted after a halt
+request or to signal that an exception has been raised while being in debug mode.
 
 
 <<<
@@ -67,17 +63,14 @@ application.
 :sectnums:
 === Debug Transport Module (DTM)
 
-The debug transport module (VHDL module: `rtl/core/neorv32_debug_dtm.vhd`) provides a JTAG test access port (TAP).
-The DTM is the first entity in the debug system, which connects and external debugger via JTAG to the next debugging
-entity: the debug module (DM).
-External JTAG access is provided by the following top-level ports.
+The debug transport module "DTM" (VHDL module: `rtl/core/neorv32_debug_dtm.vhd`) provides a bridge between a standard 4-wire
+JTAG test access port ("tap") and the internal debug module interface.
 
-.JTAG top level signals
+.JTAG Top Level Signals of the DTM
 [cols="^2,^2,^2,<8"]
 [options="header",grid="rows"]
 |=======================
 | Name          | Width | Direction | Description
-| `jtag_trst_i` | 1     | in        | TAP reset (low-active); this signal is optional, make sure to pull it _high_ if it is not used
 | `jtag_tck_i`  | 1     | in        | serial clock
 | `jtag_tdi_i`  | 1     | in        | serial data input
 | `jtag_tdo_o`  | 1     | out       | serial data output
@@ -86,61 +79,70 @@ External JTAG access is provided by the following top-level ports.
 
 .Maximum JTAG Clock
 [IMPORTANT]
-All JTAG signals are synchronized to the processor clock domain by oversampling them in DTM. Hence, no additional
-clock domain is required for the DTM. However, this constraints the maximal JTAG clock frequency (`jtag_tck_i`) to be less
-than or equal to **1/5** of the processor clock frequency (`clk_i`).
+All JTAG signals are synchronized to the processor's clock domain. Hence, no additional clock domain is required
+for the DTM. However, this constraints the maximal JTAG clock frequency (`jtag_tck_i`) to be less than or equal
+to **1/5** of the processor clock frequency (`clk_i`).
 
+.JTAG TAP Reset
 [NOTE]
-If the on-chip debugger is disabled (_ON_CHIP_DEBUGGER_EN_ = false) the JTAG serial input `jtag_tdi_i` is directly
+The NEORV32 JTAG TAP does not provide a dedicated reset signal ("TRST").
+However, JTAG-level resets can be triggered using  TMS signaling.
+
+.Maintaining the JTAG Chain
+[NOTE]
+If the on-chip debugger is disabled the JTAG serial input `jtag_tdi_i` is directly
 connected to the JTAG serial output `jtag_tdo_o` to maintain the JTAG chain.
 
-[WARNING]
-The NEORV32 JTAG TAP does not provide a _boundary check_ function (yet?). Hence, physical device pins cannot be accessed.
-
-The DTM uses the "debug module interface (dmi)" to access the actual debug module (DM).
-These accesses are controlled by TAP-internal registers.
-Each registers is selected by the JTAG instruction register (`IR`) and accessed through the JTAG data register (`DR`).
-
-[NOTE]
-The DTM's instruction and data registers can be accessed using OpenOCDs `irscan` and `drscan` commands.
-The RISC-V port of OpenOCD also provides low-level command (`riscv dmi_read` & `riscv dmi_write`) to access the _dmi_
-debug module interface.
-
-JTAG access is conducted via the *instruction register* `IR`, which is 5 bit wide, and several *data registers* `DR`
-with different sizes.
-The data registers are accessed by writing the according address to the instruction register.
-The following table shows the available data registers:
+The DTM implement a single 5-bit _instruction register_ `IR` and several _data registers_ `DR` with different sizes. The
+individual data registers are accessed by writing the according address to the instruction register. The following table
+shows all available data registers and their addresses:
 
 .JTAG TAP registers
 [cols="^2,^2,^2,<8"]
 [options="header",grid="rows"]
 |=======================
-| Address (via `IR`) | Name     | Size [bits] | Description
-| `00001`            | `IDCODE` | 32          | identifier, default: `0x0CAFE001` (configurable via package's `jtag_tap_idcode_*` constants)
-| `10000`            | `DTMCS`  | 32          | debug transport module control and status register
-| `10001`            | `DMI`    | 41          | debug module interface (_dmi_); 7-bit address, 32-bit read/write data, 2-bit operation (`00` = NOP; `10` = write; `01` = read)
+| Address (via `IR`) | Name     | Size (bits) | Description
+| `00001`            | `IDCODE` | 32          | identification code (see below)
+| `10000`            | `DTMCS`  | 32          | debug transport module control and status register (see below)
+| `10001`            | `DMI`    | 41          | debug module interface (see below)
 | others             | `BYPASS` | 1           | default JTAG bypass register
+|=======================
+
+.`IDCODE` - DTM Identification Code Register
+[cols="^2,^3,^1,<8"]
+[options="header",grid="rows"]
+|=======================
+| Bit(s) | Name      | R/W | Description
+| 31:28  | `version` | r/- | version ID, hardwired to zero
+| 27:12  | `partid`  | r/- | part ID, hardwired to zero
+| 11:1   | `manid`   | r/- | JEDEDC manufacturer ID, assigned via the <<_processor_top_entity_generics, `JEDEC_ID`>> generic
+| 0      | -         | r/- | hardwired to `1`
 |=======================
 
 .`DTMCS` - DTM Control and Status Register
 [cols="^2,^3,^1,<8"]
 [options="header",grid="rows"]
 |=======================
-| Bit(s) | Name           | r/w | Description
+| Bit(s) | Name           | R/W | Description
 | 31:18  | -              | r/- | _reserved_, hardwired to zero
-| 17     | `dmihardreset` | r/w | setting this bit will reset the DM interface; this bit auto-clears
-| 16     | `dmireset`     | r/w | setting this bit will clear ste sticky error state; this bit auto-clears
+| 17     | `dmihardreset` | r/w | setting this bit will reset the debug module interface; this bit auto-clears
+| 16     | `dmireset`     | r/w | setting this bit will clear the sticky error state; this bit auto-clears
 | 15     | -              | r/- | _reserved_, hardwired to zero
 | 14:12  | `idle`         | r/- | recommended idle states (= 0, no idle states required)
-| 11:10  | `dmistat`      | r/- | DMI statu: `00` = no error, `01` = reserved, `10` = operation failed, `11` = failed operation during pending DMI operation
-| 9:4    | `abits`        | r/- | number of DMI address bits (= 7)
-| 3:0    | `version`      | r/- | `0001` = spec version 0.13
+| 11:10  | `dmistat`      | r/- | DMI status: `00` = no error, `01` = reserved, `10` = operation failed, `11` = failed operation during pending DMI operation
+| 9:4    | `abits`        | r/- | number of address bits in `DMI` register (= 6)
+| 3:0    | `version`      | r/- | `0001` = DTM is compatible to RISC-V debug spec. versions v0.13 and v1.0
 |=======================
 
-[INFO]
-See the https://github.com/riscv/riscv-debug-spec[RISC-V debug specification] for more information regarding the data
-registers and operations. A local copy can be found in `docs/references`.
-
+.`DMI` - DTM Debug Module Interface Register
+[cols="^2,^3,^1,<8"]
+[options="header",grid="rows"]
+|=======================
+| Bit(s) | Name           | R/W | Description
+| 40:34  | `address`      | r/w | 7-bit address, see <<_dm_registers>>
+| 33:2   | `data`         | r/w | 32-bit to write/read to/from the addresses DM register
+| 1:0    | `command`      | r/w | 2-bit operation (`00` = NOP; `10` = write; `01` = read)
+|=======================
 
 
 <<<
@@ -148,74 +150,77 @@ registers and operations. A local copy can be found in `docs/references`.
 :sectnums:
 === Debug Module (DM)
 
-According to the RISC-V debug specification, the DM (VHDL module: `rtl/core/neorv32_debug_dm.vhd`)
-acts as a translation interface between abstract operations issued by the debugger and the platform-specific
-debugger implementation. It supports the following features (excerpt from the debug spec):
+The debug module "DM" (VHDL module: `rtl/core/neorv32_debug_dm.vhd`) acts as a translation interface between abstract
+operations issued by the debugger application (like GDB) and the platform-specific debugger hardware.
+It supports the following features:
 
 * Gives the debugger necessary information about the implementation.
-* Allows the hart to be halted and resumed and provides status of the current state.
-* Provides abstract read and write access to the halted hart's GPRs.
+* Allows the hart to be halted/resumed/reset and provides the current status.
+* Provides abstract read and write access to the halted hart's general purpose registers.
 * Provides access to a reset signal that allows debugging from the very first instruction after reset.
-* Provides a mechanism to allow debugging the hart immediately out of reset. (_still experimental_)
-* Provides a Program Buffer to force the hart to execute arbitrary instructions.
-* Allows memory access from a hart's point of view.
+* Provides a _program buffer_ to force the hart to execute arbitrary instructions.
+* Allows memory accesses (to the entire address space) from a hart's point of view.
+* Optionally implements an authentication mechanism to secure on-chip debugger access.
 
-The NEORV32 DM follows the "Minimal RISC-V External Debug Specification" to provide full debugging
-capabilities while keeping resource (area) requirements at a minimum level.
-It implements the **execution based debugging scheme** for a single hart and provides the following
-hardware features:
+The NEORV32 DM follows the "Minimal RISC-V External Debug Specification" to provide full debugging capabilities while
+keeping resource/area requirements at a minimum. It implements the **execution based debugging scheme** for up to
+four individual CPU cores ("harts") and provides the following architectural core features:
 
-* program buffer with 2 entries and implicit `ebreak` instruction afterwards
-* no _direct_ bus access (indirect bus access via the CPU)
+* program buffer with 2 entries and an implicit `ebreak` instruction at the end
+* indirect bus access via the CPU using the program buffer
 * abstract commands: "access register" plus auto-execution
-* no _dedicated_ halt-on-reset capabilities yet (but can be emulated)
+* halt-on-reset capability
+* optional authentication
 
-The DM provides two "sides of access": access from the DTM via the _debug module interface (dmi)_ and access from the
-CPU via the processor-internal bus. From the DTM's point of view, the DM implements a set of <<_dm_registers>> that
-are used to control and monitor the actual debugging. From the CPU's point of view, the DM implements several
-memory-mapped registers (within the _normal_ address space) that are used for communicating debugging control
-and status (<<_dm_cpu_access>>).
+.DM Spec. Version
+[TIP]
+The NEORV32 DM complies to the RISC-V DM spec version 1.0.
+
+From the DTM's point of view, the DM implements a set of <<_dm_registers>> that are used to control and monitor the
+debugging session. From the CPU's point of view, the DM implements several memory-mapped registers that are used for
+communicating data, instructions, debugging control and status (<<_dm_cpu_access>>).
 
 
 :sectnums:
 ==== DM Registers
 
-The DM is controlled via a set of registers that are accessed via the DTM's _dmi_.
-The "Minimal RISC-V Debug Specification" requires only a subset of the registers specified in the spec.
-The following registers are implemented.
-Write accesses to any other registers are ignored and read accesses will always return zero.
-Register names that are encapsulated in "( )" are not actually implemented; however, they are listed to explicitly show
-their functionality.
+The DM is controlled via a set of registers that are accessed via the DTM. The following registers are implemented:
+
+.Unimplemented Registers
+[NOTE]
+Write accesses to registers that are not implemented are simply ignored and read accesses to these
+registers will always return zero. In both cases no error condition is signaled to the DTM.
 
 .Available DM registers
 [cols="^2,^3,<7"]
 [options="header",grid="rows"]
 |=======================
-| Address | Name           | Description
-|  `0x04` | `data0`        | Abstract data 0, used for data transfer between debugger and processor
-|  `0x10` | `dmcontrol`    | Debug module control
-|  `0x11` | `dmstatus`     | Debug module status
-|  `0x12` | `hartinfo`     | Hart information
-|  `0x16` | `abstracts`    | Abstract control and status
-|  `0x17` | `command`      | Abstract command
-|  `0x18` | `abstractauto` | Abstract command auto-execution
-|  `0x1d` | (`nextdm`)     | Base address of _next_ DM; read as zero to indicate there is only _one_ DM
-|  `0x20` | `progbuf0`     | Program buffer 0
-|  `0x21` | `progbuf1`     | Program buffer 1
-|  `0x38` | (`sbcs`)       | System bus access control and status; read as zero to indicate there is no _direct_ system bus access
-|  `0x40` | `haltsum0`     | Halt summary 0
+| Address | Name                     | Description
+| 0x04    | <<_data0>>               | Abstract data register 0
+| 0x10    | <<_dmcontrol>>           | Debug module control
+| 0x11    | <<_dmstatus>>            | Debug module status
+| 0x12    | <<_hartinfo>>            | Hart information
+| 0x16    | <<_abstracts>>           | Abstract control and status
+| 0x17    | <<_command>>             | Abstract command
+| 0x18    | <<_abstractauto>>        | Abstract command auto-execution
+| 0x1d    | `nextdm`                 | Base address of next DM; reads as zero to indicate there is only one DM
+| 0x20    | <<_progbuf, `progbuf0`>> | Program buffer 0
+| 0x21    | <<_progbuf, `progbuf1`>> | Program buffer 1
+| 0x30    | <<_authdata>>            | Data to/from the authentication module
+| 0x38    | `sbcs`                   | System bus access control and status; reads as zero to indicate there is **no** system bus access
+| 0x40    | <<_haltsum0>>            | Hart halt summary
 |=======================
 
 
 :sectnums!:
-===== **`data`**
+===== **`data0`**
 
 [cols="4,27,>7"]
 [frame="topbot",grid="none"]
 |======
 | 0x04 | **Abstract data 0** | `data0`
-3+| Reset value: `UNDEFINED`
-3+| Basic read/write registers to be used with abstract command (for example to read/write data from/to CPU GPRs).
+3+| Reset value: `0x00000000`
+3+| Basic read/write data exchange register to be used with abstract commands (for example to read/write data from/to CPU GPRs).
 |======
 
 
@@ -227,20 +232,27 @@ their functionality.
 |======
 | 0x10 | **Debug module control register** | `dmcontrol`
 3+| Reset value: `0x00000000`
-3+| Control of the overall debug module and the hart. The following table shows all implemented bits. All remaining bits/bit-fields are configures as "zero" and are
-read-only. Writing '1' to these bits/fields will be ignored.
+3+| Control of the overall debug module and the hart. The following table shows all implemented bits. All remaining bits/bit-fields
+are configured as "zero" and are read-only. Writing '1' to these bits/fields will be ignored.
 |======
 
-.`dmcontrol` - debug module control register bits
+.`dmcontrol` Register Bits
 [cols="^1,^2,^1,<8"]
 [options="header",grid="rows"]
 |=======================
-| Bit | Name [RISC-V]  | R/W | Description
-| 31  | `haltreq`      | -/w | set/clear hart halt request
-| 30  | `resumereq`    | -/w | request hart to resume
-| 28  | `ackhavereset` | -/w | write `1` to clear `*havereset` flags
-|  1  | `ndmreset`     | r/w | put whole processor into reset when `1`
-|  0  | `dmactive`     | r/w | DM enable; writing `0`-`1` will reset the DM
+| Bit | Name [RISC-V]       | R/W | Description
+| 31    | `haltreq`         | -/w | set/clear hart halt request
+| 30    | `resumereq`       | -/w | request hart to resume
+| 28    | `ackhavereset`    | -/w | write `1` to clear `*havereset` flags
+| 27    | -                 | r/- | reserved, hardwired to zero
+| 26    | `hasel`           | r/- | `0`: only a single hart can be selected at once
+| 25:16 | `hartsello`       | r/w | hart select; only the lowest 3 bits are implemented
+| 15:6  | `hartselhi`       | r/- | hardwired to zero
+| 5:4   | -                 | r/- | reserved, hardwired to zero
+| 3     | `setresethaltreq` | r/- | `0`: halt-on-reset not implemented
+| 2     | `clrresethaltreq` | r/- | `0`: halt-on-reset not implemented
+| 1     | `ndmreset`        | r/w | put whole system (except OCD) into reset state when `1`
+| 0     | `dmactive`        | r/w | DM enable; writing `0`-`1` will reset the DM
 |=======================
 
 
@@ -251,35 +263,35 @@ read-only. Writing '1' to these bits/fields will be ignored.
 [frame="topbot",grid="none"]
 |======
 | 0x11 | **Debug module status register** | `dmstatus`
-3+| Reset value: `0x00400082`
+3+| Reset value: `0x00400083`
 3+| Current status of the overall debug module and the hart. The entire register is read-only.
 |======
 
-.`dmstatus` - debug module status register bits
+.`dmstatus` Register Bits
 [cols="^1,^2,<10"]
 [options="header",grid="rows"]
 |=======================
 | Bit   | Name [RISC-V]     | Description
-| 31:23 | _reserved_        | reserved; always zero
-| 22    | `impebreak`       | always `1`; indicates an implicit `ebreak` instruction after the last program buffer entry
-| 21:20 | _reserved_        | reserved; always zero
-| 19    | `allhavereset`    .2+| `1` when the hart is in reset
+| 31:23 | _reserved_        | reserved; zero
+| 22    | `impebreak`       | `1`: indicates an implicit `ebreak` instruction after the last program buffer entry
+| 21:20 | _reserved_        | reserved; zero
+| 19    | `allhavereset`    .2+| `1` when the selected hart is in reset state
 | 18    | `anyhavereset`
-| 17    | `allresumeack`    .2+| `1` when the hart has acknowledged a resume request
+| 17    | `allresumeack`    .2+| `1` when the selected hart has acknowledged a resume request
 | 16    | `anyresumeack`
-| 15    | `allnonexistent`  .2+| always zero to indicate the hart is always existent
+| 15    | `allnonexistent`  .2+| `1` when the selected hart is not available
 | 14    | `anynonexistent`
-| 13    | `allunavail`      .2+| `1` when the DM is disabled to indicate the hart is unavailable
+| 13    | `allunavail`      .2+| `1` when the DM is disabled to indicate the selected hart is unavailable
 | 12    | `anyunavail`
-| 11    | `allrunning`      .2+| `1` when the hart is running
+| 11    | `allrunning`      .2+| `1` when the selected hart is running
 | 10    | `anyrunning`
-|  9    | `allhalted`       .2+| `1` when the hart is halted
+|  9    | `allhalted`       .2+| `1` when the selected hart is halted
 |  8    | `anyhalted`
-|  7    | `authenticated`   | always `1`; there is no authentication
-|  6    | `authbusy`        | always `0`; there is no authentication
-|  5    | `hasresethaltreq` | always `0`; halt-on-reset is not supported (directly)
-|  4    | `confstrptrvalid` | always `0`; no configuration string available
-| 3:0   | `version`         | `0010` - DM is compatible to version 0.13
+|  7    | `authenticated`   | set if authentication passed; see <<_debug_authentication>>
+|  6    | `authbusy`        | set if authentication is busy, see <<_debug_authentication>>
+|  5    | `hasresethaltreq` | `0`: halt-on-reset is not supported (directly)
+|  4    | `confstrptrvalid` | `0`: no configuration string available
+| 3:0   | `version`         | `0011`: DM compatible to debug spec. version v1.0
 |=======================
 
 
@@ -294,16 +306,16 @@ read-only. Writing '1' to these bits/fields will be ignored.
 3+| This register gives information about the hart. The entire register is read-only.
 |======
 
-.`hartinfo` - hart information register bits
+.`hartinfo` Register Bits
 [cols="^1,^2,<8"]
 [options="header",grid="rows"]
 |=======================
 | Bit   | Name [RISC-V] | Description
-| 31:24 | _reserved_    | reserved; always zero
-| 23:20 | `nscratch`    | `0001`, number of `dscratch*` CPU registers = 1
-| 19:17 | _reserved_    | reserved; always zero
-| 16    | `dataccess`   | `0`, the `data` registers are shadowed in the hart's address space
-| 15:12 | `datasize`    | `0001`, number of 32-bit words in the address space dedicated to shadowing the `data` registers (1 register)
+| 31:24 | _reserved_    | reserved; zero
+| 23:20 | `nscratch`    | `0001`: number of `dscratch*` CPU registers = 1
+| 19:17 | _reserved_    | reserved; zero
+| 16    | `dataccess`   | `0`: the `data` registers are shadowed in the hart's address space
+| 15:12 | `datasize`    | `0001`: number of 32-bit words in the address space dedicated to shadowing the `data` registers (1 register)
 | 11:0  | `dataaddr`    | = `dm_data_base_c(11:0)`, signed base address of `data` words (see address map in <<_dm_cpu_access>>)
 |=======================
 
@@ -315,23 +327,23 @@ read-only. Writing '1' to these bits/fields will be ignored.
 [frame="topbot",grid="none"]
 |======
 | 0x16 | **Abstract control and status** | `abstracts`
-3+| Reset value: _see below_
+3+| Reset value: `0x02000801`
 3+| Command execution info and status.
 |======
 
-.`abstracts` - abstract control and status register bits
+.`abstracts` Register Bits
 [cols="^1,^2,^1,<8"]
 [options="header",grid="rows"]
 |=======================
 | Bit   | Name [RISC-V] | R/W | Description
-| 31:29 | _reserved_    | r/- | reserved; always zero
-| 28:24 | `progbufsize` | r/- | `0010`; size of the program buffer (`progbuf`) = 2 entries
-| 23:11 | _reserved_    | r/- | reserved; always zero
-| 12    | `busy`        | r/- | `1` when a command is being executed
-| 11    | _reserved_    | r/- | reserved; always zero
+| 31:29 | _reserved_    | r/- | reserved; zero
+| 28:24 | `progbufsize` | r/- | `0010`: size of the program buffer (`progbuf`) = 2 entries
+| 23:11 | _reserved_    | r/- | reserved; zero
+| 12    | `busy`        | r/- | set when a command is being executed
+| 11    | `relaxedpriv` | r/- | `1`: PMP rules are ignored when in debug mode
 | 10:8  | `cmderr`      | r/w | error during command execution (see below); has to be cleared by writing `111`
-| 7:4   | _reserved_    | r/- | reserved; always zero
-| 3:0   | `datacount`   | r/- | `0001`; number of implemented `data` registers for abstract commands = 1
+| 7:4   | _reserved_    | r/- | reserved; zero
+| 3:0   | `datacount`   | r/- | `0001`: number of implemented `data` registers for abstract commands = 1
 |=======================
 
 Error codes in `cmderr` (highest priority first):
@@ -357,19 +369,19 @@ Error codes in `cmderr` (highest priority first):
 
 [NOTE]
 The NEORV32 DM only supports **Access Register** abstract commands. These commands can only access the
-hart's GPRs (abstract command register index `0x1000` - `0x101f`).
+hart's GPRs x0 - x15/31 (abstract command register index `0x1000` - `0x101f`).
 
-.`command` - abstract command register - "access register" commands only
+.`command` Register Bits
 [cols="^1,^2,^1,<8"]
 [options="header",grid="rows"]
 |=======================
 | Bit   | Name [RISC-V]      | R/W | Description / required value
-| 31:24 | `cmdtype`          | -/w | `00000000` to indicate "access register" command
+| 31:24 | `cmdtype`          | -/w | `00000000`: indicates "access register" command
 | 23    | _reserved_         | -/w | reserved, has to be `0` when writing
-| 22:20 | `aarsize`          | -/w | `010` to indicate 32-bit accesses
-| 21    | `aarpostincrement` | -/w | `0`, post-increment is not supported
-| 18    | `postexec`         | -/w | if set the program buffer is executed _after_ the command
-| 17    | `transfer`         | -/w | if set the operation in `write` is conducted
+| 22:20 | `aarsize`          | -/w | `010`: indicates 32-bit accesses
+| 21    | `aarpostincrement` | -/w | `0`: post-increment is not supported
+| 18    | `postexec`         | -/w | set if the program buffer is executed _after_ the command
+| 17    | `transfer`         | -/w | set if the operation in `write` is conducted
 | 16    | `write`            | -/w | `1`: copy `data0` to `[regno]`, `0`: copy `[regno]` to `data0`
 | 15:0  | `regno`            | -/w | GPR-access only; has to be `0x1000` - `0x101f`
 |=======================
@@ -383,10 +395,10 @@ hart's GPRs (abstract command register index `0x1000` - `0x101f`).
 |======
 | 0x18 | **Abstract command auto-execution** | `abstractauto`
 3+| Reset value: `0x00000000`
-3+| Register to configure when a read/write access to a DM repeats execution of the last abstract command.
+3+| Register to configure if a read/write access to a DM register re-triggers execution of the last abstract command.
 |======
 
-.`abstractauto` - Abstract command auto-execution register bits
+.`abstractauto` Register Bits
 [cols="^1,^2,^1,<8"]
 [options="header",grid="rows"]
 |=======================
@@ -405,8 +417,20 @@ hart's GPRs (abstract command register index `0x1000` - `0x101f`).
 |======
 | 0x20 | **Program buffer 0** | `progbuf0`
 | 0x21 | **Program buffer 1** | `progbuf1`
-3+| Reset value: `NOP`-instruction
-3+| General purpose program buffer (two entries) for the DM.
+3+| Reset value: `0x00000013` ("NOP")
+3+| Program buffer (two entries) for the DM.
+|======
+
+
+:sectnums!:
+===== **`authdata`**
+
+[cols="4,27,>7"]
+[frame="topbot",grid="none"]
+|======
+| 0x30 | **Authentication data** | `authdata`
+3+| Reset value: _user-defined_
+3+| This register serves as a 32-bit serial port to/from the authentication module. See <<_debug_authentication>>.
 |======
 
 
@@ -416,82 +440,169 @@ hart's GPRs (abstract command register index `0x1000` - `0x101f`).
 [cols="4,27,>7"]
 [frame="topbot",grid="none"]
 |======
-| 0x40 | **Halt summary 0** | `haltsum0`
-3+| Reset value: `UNDEFINED`
-3+| Bit 0 of this register is set if the hart is halted (all remaining bits are always zero). The entire register is read-only.
+| 0x30 | **Halt summary 0** | `haltsum0`
+3+| Reset value: `0x00000000`
+3+| Each bit corresponds to a hart being halted. Only the lowest four bits are implemented.
 |======
+
 
 :sectnums:
 ==== DM CPU Access
 
-From the CPU's point of view, the DM behaves as a memory-mapped peripheral that includes
+From the CPU's perspective the DM acts like another memory-mapped peripheral. It occupies 512 bytes of the CPU's
+address space starting at address `base_io_dm_c` (`0xffff0000`). This address space is divided into four sections
+128 64 bytes each to provide access to the _park loop code ROM_, the _program buffer_, the _data buffer_ and the
+_status register_. The program buffer, the data buffer and the status register do not fully occupy the 128-byte-wide
+sections and are mirrored several times across the entire section.
 
-* a small ROM that contains the code for the "park loop", which is executed when the CPU is _in_ debug mode.
-* a program buffer populated by the debugger host to execute small programs
-* a data buffer to transfer data between the processor and the debugger host
-* a status register to communicate debugging requests
+.DM CPU Access - Address Map
+[cols="^2,^2,<4"]
+[options="header",grid="rows"]
+|=======================
+| Base address | Physical size | Description
+| `0xfffffe00` |     128 bytes | ROM for the "park loop" code (<<_code_rom>>)
+| `0xfffffe80` |      16 bytes | Program buffer (<<_progbuf>>)
+| `0xffffff00` |       4 bytes | Data buffer (<<_data0>>)
+| `0xffffff80` |      16 bytes | Control and <<_status_register>>
+|=======================
 
 .DM Register Access
 [IMPORTANT]
-All memory-mapped registers of the DM can only be accessed by the CPU if it is actually _in_ debug mode.
-Hence, the DM registers are not "visible" for normal CPU operations.
-Any access outside of debug mode will raise a bus error exception.
+All memory-mapped registers of the DM can only be accessed by the CPU when in debug mode. Hence, the DM registers are
+not accessible for normal CPU operations. Any CPU access outside of debug mode will raise a bus access fault exception.
 
-.Park Loop Code Sources
+
+:sectnums:
+===== Code ROM
+
+The code ROM contain the minimal OCD firmware that implements the debuggers part loop.
+
+.Park Loop Code Sources ("OCD Firmware")
 [NOTE]
-The assembly sources of the **park loop code** are available in `sw/ocd-firmware/park_loop.S`. Please note, that these
-sources are not intended to be changed by the used. Hence, the makefile does not provide an automatic option
-to compile and "install" the debugger ROM code into the HDL sources and require a manual copy
-(see `sw/ocd-firmware/README.md`).
+The assembly sources of the park loop code are available in `sw/ocd-firmware/park_loop.S`.
 
-The DM uses a total address space of 128 words of the CPU's address space (= 512 bytes) divided into four sections
-of 32 words (= 128 bytes) each.
-Please note, that the program buffer, the data buffer and the status register only uses a few effective words in this
-address space. However, these effective addresses are mirrored to fill up the whole 128 bytes of the section.
-Hence, any CPU access within this address space will succeed.
+The park loop code provides two entry points where code execution can start. These are used to enter the park loop
+either when an explicit debug-entry/halt request has been issued (for example a halt request) or when an exception
+has occurred while executing code in debug mode (from the profram buffer).
 
-.DM CPU access - address map (divided into four sections)
-[cols="^2,^4,^2,<7"]
+.Park Loop Entry Points
+[cols="^6,<4"]
 [options="header",grid="rows"]
 |=======================
-| Base address | Name [VHDL package]              | Actual size | Description
-| `0xfffff800` | `dm_code_base_c` (= `dm_base_c`) |   128 bytes | Code ROM for the "park loop" code
-| `0xfffff880` | `dm_pbuf_base_c`                 |    16 bytes | Program buffer, provided by DM
-| `0xfffff900` | `dm_data_base_c`                 |     4 bytes | Data buffer (`dm.data0`)
-| `0xfffff980` | `dm_sreg_base_c`                 |     4 bytes | Control and status register
+| Address                                 | Description
+| `dm_exc_entry_c`  (`base_io_dm_c` +  0) | Exception entry address
+| `dm_park_entry_c` (`base_io_dm_c` + 16) | Normal entry address (halt request)
 |=======================
 
-[NOTE]
-From the CPU's point of view, the DM is mapped to an _"unused"_ address range within the processor's
-<<_address_space>> right between the bootloader ROM (BOOTROM) and the actual processor-internal IO
-space at addresses `0xfffff800` - `0xfffff9ff`
+When the CPU enters (via an explicit halt request from the debugger) or re-enters debug mode (for example via an
+`ebreak` in the DM's program buffer), it jumps to the **normal entry point** that is configured via the
+<<_cpu_top_entity_generics, `CPU_DEBUG_PARK_ADDR`>> CPU generic. By default, this address is set to `dm_park_entry_c`,
+which is defined in the main package file. If an exception is encountered during debug mode, the CPU jumps to the
+address of the **exception entry point** configured via the <<_cpu_top_entity_generics, `CPU_DEBUG_EXC_ADDR`>> CPU
+generic. By default, this address is set to `dm_exc_entry_c`, which is also defined in the main package file.
 
-When the CPU enters or re-enters (for example via `ebreak` in the DM's program buffer) debug mode, it jumps to
-the beginning of the DM's "park loop" code ROM at `dm_code_base_c`. This is the _normal entry point_ for the
-park loop code. If an exception is encountered during debug mode, the CPU jumps to `dm_code_base_c + 4`,
-which is the _exception entry point_.
 
-**Status Register**
+:sectnums:
+===== Status Register
 
-The status register provides a direct communication channel between the CPU executing the park loop and the
-host-controlled controller of the DM. Note that all bits that can be written by the CPU (acknowledge flags)
-cause a single-shot (1-cycle) signal to the DM controller and auto-clear (always read as zero).
-The bits that are driven by the DM controller and are read-only to the CPU and keep their state until the CPU
-acknowledges the according request.
+The status register provides a direct communication channel between the CPU's debug-mode executing the park loop
+and the debugger-controlled DM. This register is used to communicate requests, which are issued by the
+DM, and the according acknowledges, which are generated by the CPU. The status register is sub-divided into four
+consecutive memory-mapped registers.
 
-.DM CPU access - status register
-[cols="^2,^2,^2,<8"]
+Starting at `0xffffff80` the status register provides a set of memory-mapped interface register whose functionality
+depends on whether the CPU accesses the register in read or write mode. **Read** accesses return the **requests**
+for each individual hart generated by the DM. **Write** accesses are used to **acknowledge** these requests by the
+individual harts back to the DM.
+
+For read accesses, the hart ID is used as byte offset to read the hart-specific request flags. The flags for hart 0
+are located at `0xffffff80 + 0`, the flags for hart 1 are located at `0xffffff80 + 1` and so on. Hence, each hart
+can use load-unsigned-byte instructions to isolate the hart specific flags.
+
+.DM Status Register - Read Access (byte-wise access)
+[cols="^2,^1,^1,^1,<6"]
 [options="header",grid="rows"]
 |=======================
-| Bit | Name            | CPU access | Description
-| 0   | `halt_ack`      | -/w        | Set by the CPU to indicate that the CPU is halted and keeps iterating in the park loop
-| 1   | `resume_req`    | r/-        | Set by the DM to tell the CPU to resume normal operation (leave parking loop and leave debug mode via `dret` instruction)
-| 2   | `resume_ack`    | -/w        | Set by the CPU to acknowledge that the CPU is now going to leave parking loop & debug mode
-| 3   | `execute_req`   | r/-        | Set by the DM to tell the CPU to leave debug mode and execute the instructions from the program buffer; CPU will re-enter parking loop afterwards
-| 4   | `execute_ack`   | -/w        | Set by the CPU to acknowledge that the CPU is now going to execute the program buffer
-| 5   | `exception_ack` | -/w        | Set by the CPU to inform the DM that an exception occurred during execution of the park loop or during execution of the program buffer
+| Address            | Hart | R/W  | Bits | Description
+.2+| `0xffffff80` .2+| 0 .2+| r/- ^| 0   <| Resume request
+                                  ^| 1   <| Execute request
+.2+| `0xffffff81` .2+| 1 .2+| r/- ^| 0   <| Resume request
+                                  ^| 1   <| Execute request
+.2+| `0xffffff82` .2+| 2 .2+| r/- ^| 0   <| Resume request
+                                  ^| 1   <| Execute request
+.2+| `0xffffff83` .2+| 3 .2+| r/- ^| 0   <| Resume request
+                                  ^| 1   <| Execute request
 |=======================
 
+For write accesses, four consecutive memory-mapped registers are implemented. Each individual register is used
+to acknowledge a specific condition: halt, resume, execute and exception. Each hart can acknowledge the according
+condition by writing its hart ID to the according register.
+
+.DM Status Register - Write Access (word-wise access)
+[cols="^2,^1,^1,<6"]
+[options="header",grid="rows"]
+|=======================
+| Address      | R/W | Bits | Description
+| `0xffffff80` | r/w | 1:0  | write hart ID to send hart's HALT acknowledge
+| `0xffffff84` | r/w | 1:0  | write hart ID to send hart's RESUME acknowledge
+| `0xffffff88` | r/w | 1:0  | write hart ID to send hart's EXECUTE acknowledge
+| `0xffffff8c` | r/w | 1:0  | write any value to send hart's EXCEPTION acknowledge
+|=======================
+
+
+<<<
+// ####################################################################################################################
+:sectnums:
+=== Debug Authentication
+
+Optionally, the on-chip debugger's DM can be equipped with an _authenticator module_ to secure debugger access. This authentication
+is enabled by the <<_processor_top_entity_generics, `OCD_AUTHENTICATION`>> top generic. When disabled, the debugger is always
+authorized and has unlimited access. When enabled, the debugger is required to authenticate in order to gain access.
+
+The authenticator module is implemented as individual RTL module (`rtl/core/neorv32_debug_auth.vhd`). By default, it implements
+a very simple authentication mechanism. Note that this default mechanism is not secure in any way - it is intended as example
+logic to illustrate the interface and authentication process. Users can modify the default logic or replace the entire module
+to implement a more sophisticated custom authentication mechanism.
+
+The authentication interface is compliant to the RISC-V debug spec and is based on a single CSR and two additional status bits:
+
+* <<_authdata>> CSR: this 32-bit register is used to read/write data from/to the authentication module. It is hardwired to
+all-zero if authentication is not implemented.
+* <<_dmstatus>> CSR:
+** The `authenticated` bit (read-only) is set if authentication was successful. The debugger can access the processor only
+if this bit is set. It is automatically hardwired to `1` (always authenticated) if the authentication module is not implemented.
+** The `authbusy` bit (read-only) indicates if the authentication module is busy. When set, no data should be written/read to/from
+<<_authdata>>. This bit is automatically hardwired to `0` (never busy) if the authentication module is not implemented.
+
+openOCD provides dedicated commands to exchange data with the authenticator module:
+
+.openOCD RISC-V Authentication Commands
+[source,tcl]
+----
+riscv authdata_read        // read 32-bit from authdata CSR
+riscv authdata_write value // write 32-bit value to authdata CSR
+----
+
+Based on these two primitives arbitrary complex authentication mechanism can be implemented.
+
+
+:sectnums:
+==== Default Authentication Mechanism
+
+[IMPORTANT]
+The default authentication mechanism is not secure at all. Replace it by a custom design.
+
+The default authenticator hardware implements a very simple authentication mechanism: a single read/write bit is implemented
+that directly corresponds to the `authenticated` bit in <<_dmstatus>>. This bit can be read/written as bit zero (LSB) of the
+<<_authdata>> CSR. Writing 1 to this register will result in a successful authentication. The default openOCD configuration
+script for the NEORV32 implements this basic authentication mechanism:
+
+.Default authentication process (`sw/openocd/openocd_neorv32.cfg`)
+[source,tcl]
+----
+set challenge [riscv authdata_read]          # read authdata; not required, just an example
+riscv authdata_write [expr {$challenge | 1}] # set LSB to authenticate
+----
 
 
 <<<
@@ -499,115 +610,105 @@ acknowledges the according request.
 :sectnums:
 === CPU Debug Mode
 
-The NEORV32 CPU Debug Mode `DB` or `DEBUG` (part of `rtl/core/neorv32_cpu_control.vhd`) is compatible to the
-"Minimal RISC-V Debug Specification 0.13.2".
-It is enabled/implemented by setting the CPU generic _CPU_EXTENSION_RISCV_DEBUG_ to "true" (done by setting processor
-generic _ON_CHIP_DEBUGGER_EN_).
-It provides a new operation mode called "debug mode". When enabled, three additional CSRs are available
-(section <<_cpu_debug_mode_csrs>>) and the "return from debug mode" instruction `dret` are available.
+The NEORV32 CPU Debug Mode is compatible to the **Minimal RISC-V Debug Specification 1.0** `Sdext` (external debug)
+ISA extension. When enabled via the CPU's <<_sdext_isa_extension>> generic and/or the processor's `OCD_EN` it adds
+a new CPU operation mode ("debug mode"), three additional <<_cpu_debug_mode_csrs>> and one additional instruction
+(`dret`) to the core.
 
-[IMPORTANT]
-The CPU _debug mode_ requires the `Zicsr` and `Zifencei` CPU extension to be implemented (top generics _CPU_EXTENSION_RISCV_Zicsr_
-and _CPU_EXTENSION_RISCV_Zifencei_ = true).
-
-The CPU debug-mode is entered when one of the following events appear:
+Debug-mode is entered on any of the following events:
 
 [start=1]
-. executing the `ebreak` instruction (when in machine-mode and `dcsr.ebreakm` is set OR when in user-mode and `dcsr.ebreaku` is set)
-. debug halt request from external DM (via CPU signal `db_halt_req_i`, high-active, triggering on rising-edge)
-. finished executing of a single instruction while in single-step debugging mode (enabled via `dcsr.step`)
-. hardware trigger by the <<_trigger_module>>
+. The CPU executes an `ebreak` instruction (when in machine-mode and `ebreakm` in <<_dcsr>> is set OR when in user-mode and `ebreaku` in <<_dcsr>> is set).
+. A debug halt request is issued by the DM (via CPU `db_halt_req_i` signal, high-active).
+. The CPU completes executing of a single instruction while being in single-step debugging mode (`step` in <<_dcsr>> is set).
+. A hardware trigger from the <<_trigger_module>> fires (`exe` and `action` in <<_tdata1>> / `mcontrol` are set).
 
-From a hardware point of view, these "entry conditions" are special synchronous (e.g. `ebreak` instruction) and asynchronous
-(e.g. halt request "interrupt") traps, that are handled invisibly by the control logic.
+[NOTE]
+From a hardware point of view these debug-mode-entry conditions are special traps (synchronous exceptions or
+asynchronous interrupts) that are handled transparently by the control logic.
 
 **Whenever the CPU enters debug-mode it performs the following operations:**
 
 * wake-up CPU if it was send to sleep mode by the `wfi` instruction
-* move `pc` to `dpc`
-* copy the hart's current privilege level to `dcsr.prv`
-* set `dcrs.cause` according to the cause why debug mode is entered
+* switch to debug-mode privilege level
+* move the current program counter to <<_dpc>>
+* copy the hart's current privilege level to the `prv` flags in <<_dcsr>>
+* set `cause` in <<_dcsr>> according to the cause why debug mode is entered
 * **no update** of `mtval`, `mcause`, `mtval` and `mstatus` CSRs
-* load the address configured via the CPU's _CPU_DEBUG_ADDR_ generic to the `pc` to jump to the "debugger park loop" code stored in the debug module (DM)
+* load the address configured via the CPU's (<<_cpu_top_entity_generics, `CPU_DEBUG_PARK_ADDR`>>) generic to the program counter jumping to the
+"debugger park loop" code stored in the debug module (DM)
 
-**When the CPU is in debug-mode the following things are important:**
+**When the CPU is in debug-mode:**
 
-* while in debug mode, the CPU executes the parking loop and the program buffer provided by the DM if requested
-* effective CPU privilege level is `machine` mode, any active physical memory protection (PMP) configuration is bypassed
+* while in debug mode, the CPU executes the parking loop and - if requested by the DM - the program buffer
+* effective CPU privilege level is `machine` mode; any active physical memory protection (PMP) configuration is bypassed
 * the `wfi` instruction acts as a `nop` (also during single-stepping)
-* if an exception occurs:
-** if the exception was caused by any debug-mode entry action the CPU jumps to the _normal entry point_
-   (= _CPU_DEBUG_ADDR_) of the park loop again (for example when executing `ebreak` _in_ debug-mode)
-** for all other exception sources the CPU jumps to the _exception entry point_ ( = _CPU_DEBUG_ADDR_ + 4)
-   to signal an exception to the DM; the CPU restarts the park loop again afterwards
-* interrupts are disabled; however, they will remain pending and will get executed after the CPU has left debug mode
+* if an exception occurs while being in debug mode:
+** if the exception was caused by any debug-mode entry action the CPU jumps to the normal entry point (defined by the
+<<_cpu_top_entity_generics, `CPU_DEBUG_PARK_ADDR`>> generic) of the park loop again (for example when executing `ebreak` while in debug-mode)
+** for all other exception sources the CPU jumps to the exception entry point (defined by the <<_cpu_top_entity_generics, `CPU_DEBUG_EXC_ADDR`>> generic)
+to signal an exception to the DM; the CPU restarts the park loop again afterwards
+* interrupts are disabled; however, they will remain pending and will get executed after the CPU has left debug mode and is not being single-stepped
 * if the DM makes a resume request, the park loop exits and the CPU leaves debug mode (executing `dret`)
-* the standard counters <<_machine_counter_and_timer_csrs>> `[m]cycle[h]` and `[m]instret[h]` are stopped; note that the
-<<_machine_system_timer_mtime>> keep running as well as it's shadowed copies in the `[m]time[h]` CSRs
+* the standard counters <<_machine_counter_and_timer_csrs>> `[m]cycle[h]` and `[m]instret[h]` are stopped
 * all <<_hardware_performance_monitors_hpm_csrs>> are stopped
 
-Debug mode is left either by executing the `dret` instruction footnote:[`dret` should only be executed _inside_ the debugger
-"park loop" code (-> code ROM in the debug module (DM).)] (_in_ debug mode) or by performing
-a hardware reset of the CPU. Executing `dret` outside of debug mode will raise an illegal instruction exception.
+Debug mode is left either by executing the `dret` instruction or by performing a hardware reset of the CPU.
+Executing `dret` outside of debug mode will raise an illegal instruction exception.
 
 **Whenever the CPU leaves debug mode it performs the following operations:**
 
-* set the hart's current privilege level according to `dcsr.prv`
-* restore `pc` from `dpcs`
-* resume normal operation at `pc`
+* set the hart's current privilege level according to the `prv` flags of <<_dcsr>>
+* restore the original program counter from <<_dpc>> resuming normal operation
 
 
 :sectnums:
 ==== CPU Debug Mode CSRs
 
-Two additional CSRs are required by the _Minimal RISC-V Debug Specification_: The debug mode control and status register
-`dcsr` and the program counter `dpc`. Providing a general purpose scratch register for debug mode (`dscratch0`) allows
-faster execution of program provided by the debugger, since _one_ general purpose register can be backup-ed and
-directly used.
-
-[NOTE]
-The debug-mode control and status registers (CSRs) are only accessible when the CPU is _in_ debug mode.
-If these CSRs are accessed outside of debug mode (for example when in `machine` mode) an illegal instruction exception
-is raised.
+Two additional CSRs are required by the "Minimal RISC-V Debug Specification": the debug mode control and status register
+`dcsr` and the debug program counter `dpc`. An additional general purpose scratch register for debug-mode-only
+(`dscratch0`) allows faster execution by having a fast-accessible backup register. These CSRs are only accessible if the CPU
+is in debug mode. If these CSRs are accessed outside of debug mode an illegal instruction exception is raised.
 
 
 :sectnums!:
 ===== **`dcsr`**
 
-[cols="4,27,>7"]
+[cols="<1,<8"]
 [frame="topbot",grid="none"]
-|======
-| 0x7b0 | **Debug control and status register** | `dcsr`
-3+<| Reset value: `0x40000413`
-3+<| The `dcsr` CSR is compatible to the RISC-V debug spec. It is used to configure debug mode and provides additional status information.
-The following bits are implemented. The reaming bits are read-only and always read as zero.
-|======
+|=======================
+| Name        | Debug control and status register
+| Address     | `0x7b0`
+| Reset value | `0x40000410`
+| ISA         | `Zicsr` & `Sdext`
+| Description | This register is used to configure the debug mode environment and provides additional status information.
+|=======================
 
 .Debug control and status register `dcsr` bits
 [cols="^1,^2,^1,<8"]
 [options="header",grid="rows"]
 |=======================
 | Bit   | Name [RISC-V] | R/W | Description
-| 31:28 | `xdebugver`   | r/- | `0100` - indicates external debug support exists
-| 27:16 | -             | r/- | `000000000000` - _reserved_
+| 31:28 | `xdebugver`   | r/- | `0100`: CPU debug mode is compatible to spec. version 1.0
+| 27:16 | -             | r/- | `000000000000`: _reserved_
 | 15    | `ebereakm`    | r/w | `ebreak` instructions in `machine` mode will _enter_ debug mode when set
-| 14    | `ebereakh`    | r/- | `0` - hypervisor mode not supported
-| 13    | `ebereaks`    | r/- | `0` - supervisor mode not supported
+| 14    | `ebereakh`    | r/- | `0`: hypervisor mode not supported
+| 13    | `ebereaks`    | r/- | `0`: supervisor mode not supported
 | 12    | `ebereaku`    | r/w | `ebreak` instructions in `user` mode will _enter_ debug mode when set
-| 11    | `stepie`      | r/- | `0` - IRQs are disabled during single-stepping
-| 10    | `stopcount`   | r/- | `1` - standard counters and HPMs are stopped when in debug mode
-| 9     | `stoptime`    | r/- | `0` - timers increment as usual
-| 8:6   | `cause`       | r/- | cause identifier - why debug mode was entered (see below)
-| 5     | -             | r/- | `0` - _reserved_
-| 4     | `mprven`      | r/- | `1` - <<_mstatus>>`.mprv` is also evaluated when in debug mode
-| 3     | `nmip`        | r/- | `0` - non-maskable interrupt is pending
+| 11    | `stepie`      | r/- | `0`: IRQs are disabled during single-stepping
+| 10    | `stopcount`   | r/- | `1`: standard counters and HPMs are stopped when in debug mode
+| 9     | `stoptime`    | r/- | `0`: timers increment as usual
+| 8:6   | `cause`       | r/- | cause identifier: why debug mode was entered (see below)
+| 5     | -             | r/- | `0`: _reserved_
+| 4     | `mprven`      | r/- | `1`: `mprv` in <<_mstatus>> is also evaluated when in debug mode
+| 3     | `nmip`        | r/- | `0`: non-maskable interrupt is pending
 | 2     | `step`        | r/w | enable single-stepping when set
 | 1:0   | `prv`         | r/w | CPU privilege level before/after debug mode
 |=======================
 
 Cause codes in `dcsr.cause` (highest priority first):
 
-* `010` - trigger by hardware <<_trigger_module>>
+* `010` - triggered by hardware <<_trigger_module>>
 * `001` - executed `EBREAK` instruction
 * `011` - external halt request (from DM)
 * `100` - return from single-stepping
@@ -616,26 +717,33 @@ Cause codes in `dcsr.cause` (highest priority first):
 :sectnums!:
 ===== **`dpc`**
 
-[cols="4,27,>7"]
+[cols="<1,<8"]
 [frame="topbot",grid="none"]
-|======
-| 0x7b1 | **Debug program counter** | `dpc`
-3+<| Reset value: `0x00000000`
-3+<| The `dcsr` CSR is compatible to the RISC-V debug spec. It is used to store the current program counter when
-debug mode is entered. The `dret` instruction will return to `dpc` by moving `dpc` to `pc`.
-|======
+|=======================
+| Name        | Debug program counter
+| Address     | `0x7b1`
+| Reset value | `0x00000000`
+| ISA         | `Zicsr` & `Sdext`
+| Description | The register is used to store the current program counter when debug mode is entered. The `dret` instruction will
+return to the address stored in `dpc` by automatically moving `dpc` to the program counter.
+|=======================
+
+[NOTE]
+`dpc[0]` is hardwired to zero. If `IALIGN` = 32 (i.e. <<_c_isa_extension>> is disabled) then `dpc[1]` is also hardwired to zero.
 
 
 :sectnums!:
 ===== **`dscratch0`**
 
-[cols="4,27,>7"]
+[cols="<1,<8"]
 [frame="topbot",grid="none"]
-|======
-| 0x7b2 | **Debug scratch register 0** | `dscratch0`
-3+<| Reset value: `0x00000000`
-3+<| The `dscratch0` CSR is compatible to the RISC-V debug spec. It provides a general purpose debug mode-only scratch register.
-|======
+|=======================
+| Name        | Debug scratch register 0
+| Address     | `0x7b2`
+| Reset value | `0x00000000`
+| ISA         | `Zicsr` & `Sdext`
+| Description | The register provides a general purpose debug mode-only scratch register.
+|=======================
 
 
 <<<
@@ -643,147 +751,130 @@ debug mode is entered. The `dret` instruction will return to `dpc` by moving `dp
 :sectnums:
 === Trigger Module
 
-The NEORV32 trigger module implements a subset of the features described in the "RISC-V Debug Specification / Trigger Module".
-It is always implemented when the CPU debug mode / the on-chip debugger is implemented.
+"Normal" software breakpoints (using GDB's `b`/`break` command) are implemented by temporarily replacing the according
+instruction word by an `[c.]ebreak` instruction. However, this is not possible when debugging code that is executed from
+read-only memory (for example when debugging programs that are executed via the <<_execute_in_place_module_xip>>).
+To circumvent this limitation a hardware trigger logic allows to (re-)enter debug-mode when instruction execution
+reaches a programmable address. These "hardware-assisted breakpoints" are used by GDB's `hb`/`hbreak` commands.
 
-[IMPORTANT]
-The trigger module only provides a single trigger of _instruction address match_ type. This trigger will fire
-**after** the instruction at the specific address has been executed.
+The RISC-V `Sdtrig` ISA extension adds a programmable _trigger module_ to the CPU core that is enabled via the
+<<_sdtrig_isa_extension>> generic. The trigger module implements a subset of the features described in the
+"RISC-V Debug Specification / Trigger Module" and complies to version v1.0 of the `Sdtrig` spec.
 
-The trigger module only provides a single trigger supporting only the "instruction address match" type. This limitation
-is granted by the RISC-V specs. and is sufficient to **debug code executed from read-only memory (ROM)**.
-"Normal" _software_ breakpoints (using gdb's `b`/`break` command) are implemented by temporarily replacing the according
-instruction word by a BREAK instruction. This is not possible when debugging code that is executed from read-only memory
-(for example when debugging programs that are executed via the <<_execute_in_place_module_xip>>).
-Therefore, the NEORV32 trigger module provides a single "instruction address match" trigger to enter debug mode when
-executing the instruction at a specific address. These "hardware-assisted breakpoints" are used by gdb's `hb`/`hbreak` command.
+The NEORV32 trigger module features only a _single_ trigger implementing a "type 6 - instruction address match" trigger.
+This limitation is granted by the RISC-V debug spec and is sufficient to **debug code executed from read-only memory (ROM)**.
+The trigger module can also be used independently of the CPU debug-mode / `Sdext` ISA extension.
+Machine-mode software can use the trigger module to raise a breakpoint exception when instruction execution
+reaches a programmed address.
+
+.Trigger Timing
+[NOTE]
+When enabled the address match trigger will fire **BEFORE** the instruction at the programmed address gets executed.
+
+.MEPC & DPC CSRs
+[WARNING]
+The breakpoint exception when raised by the trigger module behaves different then the "normal" trapping (see
+<<_neorv32_trap_listing>>): <<_mepc>> / <<_dpc>> is set to the address of the next instruction that needs to be
+executed to preserve the program flow. A "normal" breakpoint exception would set <<_mepc>> / <<_dpc>> to the address
+of the actual `ebreak` instruction itself.
 
 
 :sectnums:
 ==== Trigger Module CSRs
 
-The trigger module provides 8 additional CSRs, which accessible in debug mode and also in machine-mode. Since the
-trigger module does not support _native mode_ writes from machine-mode software to those CSRs are ignored.
-Hence, the CSRs of this module are only relevant for the debugger.
-
+The `Sdtrig` ISA extension adds 4 additional CSRs that are accessible from debug-mode and also from machine-mode.
+Machine-mode write accesses can be ignored by setting ´dmode´ in <<_tdata1>>. This is automatically done by the debugger
+if it uses the trigger module for implementing a "hardware breakpoint"
 
 :sectnums!:
 ===== **`tselect`**
 
-[cols="4,27,>7"]
+[cols="<1,<8"]
 [frame="topbot",grid="none"]
-|======
-| 0x7a0 | **Trigger select register** | `tselect`
-3+<| Reset value: `0x00000000`
-3+<| This CSR is hardwired to zero indicating there is only one trigger available. Any write access is ignored.
-|======
+|=======================
+| Name        | Trigger select register
+| Address     | `0x7a0`
+| Reset value | `0x00000000`
+| ISA         | `Zicsr` & `Sdtrig`
+| Description | This CSR is hardwired to zero indicating there is only one trigger available. Any write access is ignored.
+|=======================
 
 
 :sectnums!:
 ===== **`tdata1`**
 
-[cols="4,27,>7"]
+[cols="<1,<8"]
 [frame="topbot",grid="none"]
-|======
-| 0x7a1 | **Trigger data register 1 / match control register** | `tdata1` / `mcontrol`
-3+<| Reset value: `0x28041048`
-3+<| This CSR is used to configure the address match trigger. Only one bit is writable, the remaining bits are hardwired (see table below).
-Write attempts to the hardwired bits are ignored.
-|======
+|=======================
+| Name        | Trigger data register 1, visible as trigger "type 6 match control" (`mcontrol6`)
+| Address     | `0x7a1`
+| Reset value | `0x60000048`
+| ISA         | `Zicsr` & `Sdtrig`
+| Description | This CSR is used to configure the address match trigger using "type 6" format.
+|=======================
 
-.Match control CSR (`tdata1`) bits
+.Match Control CSR (`tdata1`) Bits
 [cols="^1,^2,^1,<8"]
 [options="header",grid="rows"]
 |=======================
 | Bit   | Name [RISC-V] | R/W | Description
-| 31:28 | `type`        | r/- | `0010` - address match trigger
-| 27    | `dmode`       | r/- | `1` - only debug-mode can write to the `tdata*` CSRs
-| 26:21 | `maskmax`     | r/- | `000000` - only exact values
-| 20    | `hit`         | r/- | `0` - feature not supported
-| 19    | `select`      | r/- | `0` - fire trigger on address match
-| 18    | `timing`      | r/- | `1` - trigger **after** executing the triggering instruction
-| 17:16 | `sizelo`      | r/- | `00` - match against an access of any size
-| 15:12 | `action`      | r/- | `0001` - enter debug mode on trigger fire
-| 11    | `chain`       | r/- | `0` - chaining is not supported - there is only one trigger
-| 10:6  | `match`       | r/- | `0000` - only full-address match
-| 6     | `m`           | r/- | `1` - trigger enabled when in machine-mode
-| 5     | `h`           | r/- | `0` - hypervisor-mode not supported
-| 4     | `s`           | r/- | `0` - supervisor-mode not supported
-| 3     | `u`           | r/- | trigger enabled when in user-mode, set when `U` ISA extension is enabled
-| 2     | `exe`         | r/w | set to enable trigger
-| 1     | `store`       | r/- | `0` - store address/data matching not supported
-| 0     | `load`        | r/- | `0` - load address/data matching not supported
+| 31:28 | `type`        | r/- | `0100`: address match trigger type 6
+| 27    | `dmode`       | r/w | set to ignore write accesses to <<_tdata1>> and <<_tdata2>> from machine-mode; writable from debug-mode only
+| 26    | `uncertain`   | r/- | `0`: trigger satisfies the configured conditions
+| 25    | `hit1`        | r/- | `0`: hardwired to zero, only `hit0` is used
+| 24    | `vs`          | r/- | `0`: VS-mode not supported
+| 23    | `vu`          | r/- | `0`: VU-mode not supported
+| 22    | `hit0`        | r/c | set when trigger has fired (**BEFORE** executing the triggering address); must be explicitly cleared by writing zero; writing 1 has no effect
+| 21    | `select`      | r/- | `0`: only address matching is supported
+| 20:19 | reserved      | r/- | `00`: hardwired to zero
+| 18:16 | `size`        | r/- | `000`: match accesses of any size
+| 15:12 | `action`      | r/w | `0000` = breakpoint exception on trigger match, `0001` = enter debug-mode on trigger match
+| 11    | `chain`       | r/- | `0`: chaining is not supported as there is only one trigger
+| 10:6  | `match`       | r/- | `0000`: equal-match only
+| 6     | `m`           | r/- | `1`: trigger enabled when in machine-mode
+| 5     | `uncertainen` | r/- | `0`: feature not supported, hardwired to zero
+| 4     | `s`           | r/- | `0`: supervisor-mode not supported
+| 3     | `u`           | r/- | `0`/`1`: trigger enabled when in user-mode, set if `U` ISA extension is enabled
+| 2     | `execute`     | r/w | set to enable trigger matching on instruction address
+| 1     | `store`       | r/- | `0`: store address/data matching not supported
+| 0     | `load`        | r/- | `0`: load address/data matching not supported
 |=======================
 
 
 :sectnums!:
 ===== **`tdata2`**
 
-[cols="4,27,>7"]
+[cols="<1,<8"]
 [frame="topbot",grid="none"]
-|======
-| 0x7a2 | **Trigger data register 2** | `tdata2`
-3+<| Reset value: `0x00000000`
-3+<| Since only the "address match trigger" type is supported, this r/w CSR is used to store the address of the triggering instruction.
-|======
-
-
-:sectnums!:
-===== **`tdata3`**
-
-[cols="4,27,>7"]
-[frame="topbot",grid="none"]
-|======
-| 0x7a3 | **Trigger data register 3** | `tdata3`
-3+<| Reset value: `0x00000000`
-3+<| This CSR is not required for the NEORV32 trigger module. Hence, it is hardwired to zero and any write access is ignored.
-|======
+|=======================
+| Name        | Trigger data register 2
+| Address     | `0x7a2`
+| Reset value | `0x00000000`
+| ISA         | `Zicsr` & `Sdtrig`
+| Description | Since only the "address match trigger" type is supported, this r/w CSR is used to configure the address of the triggering instruction.
+Note that the trigger module will fire **before** the instruction at the programmed address gets executed.
+|=======================
 
 
 :sectnums!:
 ===== **`tinfo`**
 
-[cols="4,27,>7"]
+[cols="<1,<8"]
 [frame="topbot",grid="none"]
-|======
-| 0x7a4 | **Trigger information register** | `tinfo`
-3+<| Reset value: `0x00000004`
-3+<| This CSR is hardwired to "4" indicating there is only an "address match trigger" available. Any write access is ignored.
-|======
+|=======================
+| Name        | Trigger information register
+| Address     | `0x7a4`
+| Reset value | `0x01000006`
+| ISA         | `Zicsr` & `Sdtrig`
+| Description | The CSR shows global trigger information (see below). Any write access is ignored.
+|=======================
 
-
-:sectnums!:
-===== **`tcontrol`**
-
-[cols="4,27,>7"]
-[frame="topbot",grid="none"]
-|======
-| 0x7a5 | **Trigger control register** | `tcontrol`
-3+<| Reset value: `0x00000000`
-3+<| This CSR is not required for the NEORV32 trigger module. Hence, it is hardwired to zero and any write access is ignored.
-|======
-
-
-:sectnums!:
-===== **`mcontext`**
-
-[cols="4,27,>7"]
-[frame="topbot",grid="none"]
-|======
-| 0x7a8 | **Machine context register** | `mcontext`
-3+<| Reset value: `0x00000000`
-3+<| This CSR is not required for the NEORV32 trigger module. Hence, it is hardwired to zero and any write access is ignored.
-|======
-
-
-:sectnums!:
-===== **`scontext`**
-
-[cols="4,27,>7"]
-[frame="topbot",grid="none"]
-|======
-| 0x7aa | **Supervisor context register** | `scontext`
-3+<| Reset value: `0x00000000`
-3+<| This CSR is not required for the NEORV32 trigger module. Hence, it is hardwired to zero and any write access is ignored.
-|======
-
+.Trigger Info CSR (`tinfo`) Bits
+[cols="^1,^2,^1,<8"]
+[options="header",grid="rows"]
+|=======================
+| Bit   | Name [RISC-V] | R/W | Description
+| 31:24 | `version`     | r/- | `0x01`: compatible to spec. version v1.0
+| 23:15 | reserved      | r/- | `0x00`: hardwired to zero
+| 15:0  | `info`        | r/- | `0x0006`: only "type 6 trigger" is supported
+|=======================

@@ -5,30 +5,33 @@
 [cols="<3,<3,<4"]
 [frame="topbot",grid="none"]
 |=======================
-| Hardware source file(s): | neorv32_gpio.vhd | 
-| Software driver file(s): | neorv32_gpio.c |
-|                          | neorv32_gpio.h |
-| Top entity port:         | `gpio_o` | 64-bit parallel output port
-|                          | `gpio_i` | 64-bit parallel input port
-| Configuration generics:  | _IO_GPIO_EN_ | implement GPIO port when _true_
-| CPU interrupts:          | none |
+| Hardware source files:  | neorv32_gpio.vhd |
+| Software driver files:  | neorv32_gpio.c |
+|                         | neorv32_gpio.h |
+| Top entity ports:       | `gpio_o` | 64-bit parallel output port
+|                         | `gpio_i` | 64-bit parallel input port
+| Configuration generics: | `IO_GPIO_NUM` | number of input/output pairs to implement (0..64)
+| CPU interrupts:         | none |
+| Access restrictions:  2+| non-32-bit write accesses are ignored
 |=======================
 
-The general purpose parallel IO port unit provides a simple 64-bit parallel input port and a 64-bit parallel
-output port. These ports can be used chip-externally (for example to drive status LEDs, connect buttons, etc.)
-or chip-internally to provide control signals for other IP modules. The component is disabled for
-implementation when the _IO_GPIO_EN_ generic is set _false_. In this case the GPIO output port `gpio_o` is tied to all-zero.
+
+**Overview**
+
+The general purpose parallel IO unit provides a simple parallel input and output port. These ports can be used
+chip-externally (for example to drive status LEDs, connect buttons, etc.) or chip-internally to provide control
+signals for other IP modules.
+
+The actual number of input/output pairs is defined by the `IO_GPIO_NUM` generic. When set to zero, the GPIO module
+is excluded from synthesis and the output port `gpio_o` is tied to all-zero. If `IO_GPIO_NUM` is less than the
+maximum value of 64, only the LSB-aligned bits in `gpio_o` and `gpio_i` are actually connected while the remaining
+bits are tied to zero or are left unconnected, respectively.
 
 .Access Atomicity
 [NOTE]
 The GPIO modules uses two memory-mapped registers (each 32-bit) each for accessing the input and
 output signals. Since the CPU can only process 32-bit "at once" updating the entire output cannot
 be performed within a single clock cycle.
-
-.INPUT is read-only
-[NOTE]
-Write accesses to the `NEORV32_GPIO.INPUT_LO` and `NEORV32_GPIO.INPUT_HI` registers will raise a store bus
-error exception. The BUSKEEPER will indicate a "DEVICE_ERR" in this case.
 
 
 **Register Map**
@@ -37,9 +40,9 @@ error exception. The BUSKEEPER will indicate a "DEVICE_ERR" in this case.
 [cols="<2,<2,^1,^1,<6"]
 [options="header",grid="rows"]
 |=======================
-| Address      | Name [C]                 | Bit(s) | R/W | Function
-| `0xffffffc0` | `NEORV32_GPIO.INPUT_LO`  | 31:0   | r/- | parallel input port pins 31:0
-| `0xffffffc4` | `NEORV32_GPIO.INPUT_HI`  | 31:0   | r/- | parallel input port pins 63:32
-| `0xffffffc8` | `NEORV32_GPIO.OUTPUT_LO` | 31:0   | r/w | parallel output port pins 31:0
-| `0xffffffcc` | `NEORV32_GPIO.OUTPUT_HI` | 31:0   | r/w | parallel output port pins 63:32
+| Address      | Name [C]    | Bit(s) | R/W | Function
+| `0xfffc0000` | `INPUT[0]`  | 31:0   | r/- | parallel input port pins 31:0
+| `0xfffc0004` | `INPUT[1]`  | 31:0   | r/- | parallel input port pins 63:32
+| `0xfffc0008` | `OUTPUT[0]` | 31:0   | r/w | parallel output port pins 31:0
+| `0xfffc000c` | `OUTPUT[1]` | 31:0   | r/w | parallel output port pins 63:32
 |=======================

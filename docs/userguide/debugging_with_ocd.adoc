@@ -2,31 +2,35 @@
 :sectnums:
 == Debugging using the On-Chip Debugger
 
-The NEORV32 on-chip debugger allows _online_ in-system debugging via an external JTAG access port from a
+The NEORV32 on-chip debugger ("OCD") allows _online_ in-system debugging via an external JTAG access port from a
 host machine. The general flow is independent of the host machine's operating system. However, this tutorial uses
 Windows and Linux (Ubuntu on Windows / WSL) in parallel running the upstream version of OpenOCD and the
 RISC-V _GNU debugger_ `gdb`.
 
+.TLDR
+[TIP]
+You can start a pre-configured debug session (using default `main.elf` as executable and
+`target extended-remote localhost:3333` as GDB connection configuration) by using the **GDB** makefile target
+(i.e. `make gdb`).
+
+.OCD Hardware Implementation
 [NOTE]
 See datasheet section https://stnolting.github.io/neorv32/#_on_chip_debugger_ocd[On Chip Debugger (OCD)]
 for more information regarding the actual hardware.
 
+.OCD CPU Requirements
 [NOTE]
 The on-chip debugger is only implemented if the _ON_CHIP_DEBUGGER_EN_ generic is set _true_. Furthermore, it requires
-the `Zicsr` and `Zifencei` CPU extension to be implemented (top generics _CPU_EXTENSION_RISCV_Zicsr_ = _true_
-and _CPU_EXTENSION_RISCV_Zifencei_ = _true_).
-
-[TIP]
-<<_segger_embedded_studio>> can also be used to develop and debug applications for the NEORV32 using the on-chip debugger.
+the `Zicsr` and `Zifencei` CPU extension, which are always enabled by the CPU.
 
 
 :sectnums:
 === Hardware Requirements
 
-Make sure the on-chip debugger of your NEORV32 setup is implemented (_ON_CHIP_DEBUGGER_EN_ generic = true). This
+Make sure the on-chip debugger of your NEORV32 setup is implemented (`ON_CHIP_DEBUGGER_EN` generic = true). This
 tutorial uses `gdb` to **directly upload an executable** to the processor. If you are using the default
 processor setup _with_ internal instruction memory (IMEM) make sure it is implemented as RAM
-(_INT_BOOTLOADER_EN_ generic = true).
+(`INT_BOOTLOADER_EN` generic = true).
 
 Connect a JTAG adapter to the NEORV32 `jtag_*` interface signals. If you do not have a full-scale JTAG adapter, you can
 also use a FTDI-based adapter like the "FT2232H-56Q Mini Module", which is a simple and inexpensive FTDI breakout board.
@@ -35,17 +39,17 @@ also use a FTDI-based adapter like the "FT2232H-56Q Mini Module", which is a sim
 [cols="^3,^2,^2"]
 [options="header",grid="rows"]
 |=======================
-| NEORV32 top signal | JTAG signal | FTDI port
+| NEORV32 top signal | JTAG signal | Default FTDI port
 | `jtag_tck_i`       | TCK         | D0
 | `jtag_tdi_i`       | TDI         | D1
 | `jtag_tdo_o`       | TDO         | D2
 | `jtag_tms_i`       | TMS         | D3
-| `jtag_trst_i`      | TRST        | D4
 |=======================
 
-[TIP]
-The low-active JTAG tap reset `jtag_trst_i` signals is _optional_ as a reset can also be triggered via the TAP controller
-issuing special commands. If `jtag_trst_i` is not connected make sure to pull the signal _high_.
+.JTAG TAP Reset
+[NOTE]
+The NEORV32 JTAG TAP does not provide a dedicated reset signal ("TRST"). However, the missing TRST is not a problem,
+since JTAG-level resets can be triggered using with TMS signaling.
 
 
 :sectnums:
@@ -74,7 +78,7 @@ libusb1 09e75e98b4d9ea7909e8837b7a3f00dda4589dc3
 For bug reports, read
         http://openocd.org/doc/doxygen/bugs.html
 Info : clock speed 1000 kHz
-Info : JTAG tap: neorv32.cpu tap/device found: 0x0cafe001 (mfg: 0x000 (<invalid>), part: 0xcafe, ver: 0x0)
+Info : JTAG tap: neorv32.cpu tap/device found: 0x00000000 (mfg: 0x000 (<invalid>), part: 0x0000, ver: 0x0)
 Info : datacount=1 progbufsize=2
 Info : Disabling abstract command reads from CSRs.
 Info : Examined RISC-V core; found 1 harts
@@ -94,8 +98,10 @@ the `misa` CSRs). The processor is halted and OpenOCD waits fot `gdb` to connect
 :sectnums:
 === Debugging with GDB
 
+.GDB + SVD
 [TIP]
-The GNU debugger is part of the RISC-V GCC toolchain (see <<_software_toolchain_setup>>).
+Together with a third-party plugin the processor's SVD file can be imported right into GDB to allow comfortable
+debugging of peripheral/IO devices (see https://github.com/stnolting/neorv32/discussions/656).
 
 This guide uses the simple "blink example" from `sw/example/demo_blink_led` as simplified test application to
 show the basics of in-system debugging.
@@ -233,7 +239,7 @@ instruction. Whenever execution reaches this instruction, debug mode is entered 
 instruction at this address to maintain original program behavior. +
  +
 When debugging programs executed from ROM _hardware-assisted_ breakpoints using the core's trigger module have to be used.
-See section <<_hardware_breakpoints>> for more information. 
+See section <<_hardware_breakpoints>> for more information.
 
 Now execute `c` (= continue). The CPU will resume operation until it hits the break-point.
 By this we can move from one counter increment to another.

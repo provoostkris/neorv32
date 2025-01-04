@@ -5,78 +5,69 @@
 [cols="<3,<3,<4"]
 [frame="topbot",grid="none"]
 |=======================
-| Hardware source file(s): | neorv32_trng.vhd | 
-| Software driver file(s): | neorv32_trng.c |
-|                          | neorv32_trng.h |
-| Top entity port:         | none | 
-| Configuration generics:  | _IO_TRNG_EN_   | implement TRNG when _true_
-|                          | _IO_TRNG_FIFO_ | data FIFO depth, min 1, has to be a power of two
-| CPU interrupts:          | none | 
+| Hardware source files:  | neorv32_trng.vhd |
+| Software driver files:  | neorv32_trng.c |
+|                         | neorv32_trng.h |
+| Top entity ports:       | none |
+| Configuration generics: | `IO_TRNG_EN`   | implement TRNG when `true`
+|                         | `IO_TRNG_FIFO` | data FIFO depth, min 1, has to be a power of two
+| CPU interrupts:         | none
+| Access restrictions:  2+| non-32-bit write accesses are ignored
 |=======================
+
+
+**Overview**
+
+The NEORV32 true random number generator provides _physically_ true random numbers. It is based on free-running
+ring-oscillators that generate **phase noise** when being sampled by a constant clock. This phase noise is
+used as physical entropy source. The TRNG features a platform independent architecture without FPGA-specific
+primitives, macros or attributes so it can be synthesized for _any_ FPGA.
+
+.In-Depth Documentation
+[TIP]
+For more information about the neoTRNG architecture and an analysis of its random quality check out the
+neoTRNG repository: https://github.com/stnolting/neoTRNG
+
+.Inferring Latches
+[NOTE]
+The synthesis tool might emit warnings regarding **inferred latches** or **combinatorial loops**. However, this
+is not design flaw as this is exactly what we want. ;)
 
 
 **Theory of Operation**
 
-The NEORV32 true random number generator provides _physically_ true random numbers.
-Instead of using a pseudo RNG like a LFSR, the TRNG uses a simple, straight-forward ring
-oscillator concept as physical entropy source. Hence, voltage, thermal and also semiconductor manufacturing
-fluctuations are used to provide a true physical entropy source.
+The TRNG provides two memory mapped interface register. One control register (`CTRL`) for configuration and
+status check and one data register (`DATA`) for obtaining the random data. The TRNG is enabled by setting the
+control register's `TRNG_CTRL_EN`. As soon as the `TRNG_CTRL_AVAIL` bit is set a new random data byte is
+available and can be obtained from the lowest 8 bits of the `DATA` register. If this bit is cleared, there
+is no valid data available and the reading `DATA` will return all-zero.
 
-The TRNG features a platform independent architecture without FPGA-specific primitives, macros or
-attributes so it can be synthesized for _any_ FPGA. Ir is based on the **neoTRNG V2**, which is a "spin-off project" of the
-NEORV32 processor. More detailed information about the neoTRNG, its architecture and a
-detailed evaluation of the random number quality can be found it the neoTRNG repository: https://github.com/stnolting/neoTRNG
-
-.Inferring Latches
-[NOTE]
-The synthesis tool might emit a warning like _"inferring latches for ... neorv32_trng ..."_. This is no problem
-as this is what we actually want: the TRNG is based on latches, which implement the inverters of the ring oscillators.
+An internal entropy FIFO can be configured using the `IO_TRNG_FIFO` generic. This FIFO automatically samples
+new random data from the TRNG to provide some kind of _random data pool_ for applications which require a
+larger number of random data in a short time. The random data FIFO can be cleared at any time either by
+disabling the TRNG or by setting the `TRNG_CTRL_FIFO_CLR` flag. The FIFO depth can be retrieved by software
+via the `TRNG_CTRL_FIFO_*` bits.
 
 .Simulation
 [IMPORTANT]
-When simulating the processor the NEORV32 TRNG is automatically set to "simulation mode". In this mode, the physical entropy
-sources (= the ring oscillators) are replaced by a simple **pseudo RNG (LFSR)** providing weak pseudo-random data only.
-The _TRNG_CTRL_SIM_MODE_ flag of the control register is set if simulation mode is active.
-
-
-**Using the TRNG**
-
-The TRNG features a single control register `CTRL` for control, status check and data access. When the _TRNG_CTRL_EN_
-bit is set, the TRNG is enabled and starts operation.
-
-.TRNG Reset
-[NOTE]
-The TRNG core does not provide a dedicated reset. In order to ensure correct operations, the TRNG should be
-disabled (=reset) by clearing the _TRNG_CTRL_EN_ and waiting some 1000s clock cycles before re-enabling it.
-
-As soon as the _TRNG_CTRL_VALID_ bit is set a new random data byte is available and can be obtained from the lowest 8 bits
-of the `CTRL` register (_TRNG_CTRL_DATA_MSB_ : _TRNG_CTRL_DATA_LSB_). If this bit is cleared, there is no valid data available
-and the lowest 8 bit of the `CTRL` register are set to all-zero.
-
-.Read Access Security
-[NOTE]
-The random data byte (_TRNG_CTRL_DATA_) in the control register is automatically cleared after each read access
-to prevent software from reading the _same_ random data byte more than once.
-
-An optional random data FIFO can be configured using the <<_io_trng_fifo>> generic. This FIFO automatically samples
-new random data from the TRNG to provide some kind of _random data pool_ for applications, which require a large number
-of RND data in a short time. The minimal and default value for <<_io_trng_fifo>> is 1 (implementing a register rather
-than a real FIFO); the generic has to be a power of two.
-
-The random data FIFO can be cleared at any time either by disabling the TRNG via the _TRNG_CTRL_EN_ flag or by
-setting the _TRNG_CTRL_FIFO_CLR_ flag. Note that this flag is write-only and auto clears after being set. 
+When simulating the processor the TRNG is automatically set to "simulation mode". In this mode the physical
+entropy sources (the ring oscillators) are replaced by a simple **pseudo RNG** based on a LFSR providing only
+**deterministic pseudo-random** data. The `TRNG_CTRL_SIM_MODE` flag of the control register is set if simulation
+mode is active.
 
 
 **Register Map**
 
 .TRNG register map (`struct NEORV32_TRNG`)
-[cols="<2,<2,<4,^1,<7"]
+[cols="<2,<1,<4,^1,<7"]
 [options="header",grid="all"]
 |=======================
 | Address | Name [C] | Bit(s), Name [C] | R/W | Function
-.5+<| `0xffffffb8` .5+<| `NEORV32_TRNG.CTRL` <|`7:0` _TRNG_CTRL_DATA_MSB_ : _TRNG_CTRL_DATA_MSB_ ^| r/- <| 8-bit random data
-                                             <|`28` _TRNG_CTRL_FIFO_CLR_                         ^| -/w <| flush random data FIFO when set (auto clears)
-                                             <|`29` _TRNG_CTRL_SIM_MODE_                         ^| r/- <| simulation mode (PRNG!)
-                                             <|`30` _TRNG_CTRL_EN_                               ^| r/w <| TRNG enable
-                                             <|`31` _TRNG_CTRL_VALID_                            ^| r/- <| random data is valid when set
+.5+<| `0xfffa0000` .5+<| `CTRL` <|`0`    `TRNG_CTRL_EN`                            ^| r/w <| TRNG enable
+                                <|`1`    `TRNG_CTRL_FIFO_CLR`                      ^| -/w <| flush random data FIFO when set; flag auto-clears
+                                <|`5:2`  `TRNG_CTRL_FIFO_MSB : TRNG_CTRL_FIFO_LSB` ^| r/- <| FIFO depth, log2(`IO_TRNG_FIFO`)
+                                <|`6`    `TRNG_CTRL_SIM_MODE`                      ^| r/- <| simulation mode (PRNG!)
+                                <|`7`    `TRNG_CTRL_AVAIL`                         ^| r/- <| random data available when set
+.2+<| `0xfffa0004` .2+<| `DATA` <|`7:0`  `TRNG_DATA_MSB : TRNG_DATA_LSB`           ^| r/- <| random data byte
+                                <|`31:8` _reserved_                                ^| r/- <| reserved, read as zero
 |=======================

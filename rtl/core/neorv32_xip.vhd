@@ -1,42 +1,15 @@
--- #################################################################################################
--- # << NEORV32 - Execute In Place (XIP) Module >>                                                 #
--- # ********************************************************************************************* #
--- # This module allows the CPU to execute code (and read constant data) directly from an SPI      #
--- # flash memory. Two host ports are implemented: one  for accessing the control and status       #
--- # registers (mapped to the processor's IO space) and one for the actual instruction/data fetch. #
--- # The actual address space mapping of the "instruction/data interface" is done by programming   #
--- # special control register bits.                                                                #
--- # ********************************************************************************************* #
--- # BSD 3-Clause License                                                                          #
--- #                                                                                               #
--- # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
--- #                                                                                               #
--- # Redistribution and use in source and binary forms, with or without modification, are          #
--- # permitted provided that the following conditions are met:                                     #
--- #                                                                                               #
--- # 1. Redistributions of source code must retain the above copyright notice, this list of        #
--- #    conditions and the following disclaimer.                                                   #
--- #                                                                                               #
--- # 2. Redistributions in binary form must reproduce the above copyright notice, this list of     #
--- #    conditions and the following disclaimer in the documentation and/or other materials        #
--- #    provided with the distribution.                                                            #
--- #                                                                                               #
--- # 3. Neither the name of the copyright holder nor the names of its contributors may be used to  #
--- #    endorse or promote products derived from this software without specific prior written      #
--- #    permission.                                                                                #
--- #                                                                                               #
--- # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS   #
--- # OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF               #
--- # MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE    #
--- # COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,     #
--- # EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE #
--- # GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED    #
--- # AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING     #
--- # NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED  #
--- # OF THE POSSIBILITY OF SUCH DAMAGE.                                                            #
--- # ********************************************************************************************* #
--- # The NEORV32 Processor - https://github.com/stnolting/neorv32              (c) Stephan Nolting #
--- #################################################################################################
+-- ================================================================================ --
+-- NEORV32 SoC - Execute In-Place Module (XIP)                                      --
+-- -------------------------------------------------------------------------------- --
+-- This module allows the CPU to execute code (and read constant data) directly     --
+-- from an SPI flash memory by transforming bus accesses into SPI transmissions.    --
+-- -------------------------------------------------------------------------------- --
+-- The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              --
+-- Copyright (c) NEORV32 contributors.                                              --
+-- Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  --
+-- Licensed under the BSD-3-Clause license, see LICENSE for details.                --
+-- SPDX-License-Identifier: BSD-3-Clause                                            --
+-- ================================================================================ --
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -46,50 +19,26 @@ library neorv32;
 use neorv32.neorv32_package.all;
 
 entity neorv32_xip is
+  generic (
+    XIP_CACHE_EN : boolean -- external XIP cache is enabled
+  );
   port (
-    -- global control --
     clk_i       : in  std_ulogic; -- global clock line
     rstn_i      : in  std_ulogic; -- global reset line, low-active
-    -- host access: control register access port --
-    ct_addr_i   : in  std_ulogic_vector(31 downto 0); -- address
-    ct_rden_i   : in  std_ulogic; -- read enable
-    ct_wren_i   : in  std_ulogic; -- write enable
-    ct_data_i   : in  std_ulogic_vector(31 downto 0); -- data in
-    ct_data_o   : out std_ulogic_vector(31 downto 0); -- data out
-    ct_ack_o    : out std_ulogic; -- transfer acknowledge
-    -- host access: transparent SPI access port (read-only) --
-    acc_addr_i  : in  std_ulogic_vector(31 downto 0); -- address
-    acc_rden_i  : in  std_ulogic; -- read enable
-    acc_wren_i  : in  std_ulogic; -- write enable
-    acc_data_o  : out std_ulogic_vector(31 downto 0); -- data out
-    acc_ack_o   : out std_ulogic; -- transfer acknowledge
-    acc_err_o   : out std_ulogic; -- transfer error
-    -- status --
-    xip_en_o    : out std_ulogic; -- XIP enable
-    xip_acc_o   : out std_ulogic; -- pending XIP access
-    xip_page_o  : out std_ulogic_vector(03 downto 0); -- XIP page
-    -- clock generator --
+    bus_req_i   : in  bus_req_t;  -- bus request
+    bus_rsp_o   : out bus_rsp_t;  -- bus response
+    xip_req_i   : in  bus_req_t;  -- XIP request
+    xip_rsp_o   : out bus_rsp_t;  -- XIP response
     clkgen_en_o : out std_ulogic; -- enable clock generator
-    clkgen_i    : in  std_ulogic_vector(07 downto 0);
-    -- SPI device interface --
+    clkgen_i    : in  std_ulogic_vector(7 downto 0);
     spi_csn_o   : out std_ulogic; -- chip-select, low-active
     spi_clk_o   : out std_ulogic; -- serial clock
-    spi_data_i  : in  std_ulogic; -- device data output
-    spi_data_o  : out std_ulogic  -- controller data output
+    spi_dat_i   : in  std_ulogic; -- device data output
+    spi_dat_o   : out std_ulogic  -- controller data output
   );
 end neorv32_xip;
 
 architecture neorv32_xip_rtl of neorv32_xip is
-
-  -- IO space: module base address --
-  constant hi_abb_c : natural := index_size_f(io_size_c)-1; -- high address boundary bit
-  constant lo_abb_c : natural := index_size_f(xip_size_c); -- low address boundary bit
-
-  -- CT register access control --
-  signal ct_acc_en : std_ulogic; -- module access enable
-  signal ct_addr   : std_ulogic_vector(31 downto 0); -- access address
-  signal ct_wren   : std_ulogic; -- word write enable
-  signal ct_rden   : std_ulogic; -- read enable
 
   -- control register --
   constant ctrl_enable_c      : natural :=  0; -- r/w: module enable
@@ -105,16 +54,17 @@ architecture neorv32_xip_rtl of neorv32_xip is
   constant ctrl_xip_abytes1_c : natural := 12; -- r/w: XIP number of address bytes (0=1,1=2,2=3,3=4) - bit 1
   constant ctrl_rd_cmd0_c     : natural := 13; -- r/w: SPI flash read command - bit 0
   constant ctrl_rd_cmd7_c     : natural := 20; -- r/w: SPI flash read command - bit 7
-  constant ctrl_page0_c       : natural := 21; -- r/w: XIP memory page - bit 0
-  constant ctrl_page3_c       : natural := 24; -- r/w: XIP memory page - bit 3
-  constant ctrl_spi_csen_c    : natural := 25; -- r/w: SPI chip-select enabled
-  constant ctrl_highspeed_c   : natural := 26; -- r/w: SPI high-speed mode enable (ignoring ctrl_spi_prsc)
-  constant ctrl_burst_en_c    : natural := 27; -- r/w: XIP burst mode enable
+  constant ctrl_spi_csen_c    : natural := 21; -- r/w: SPI chip-select enabled
+  constant ctrl_highspeed_c   : natural := 22; -- r/w: SPI high-speed mode enable (ignoring ctrl_spi_prsc)
+  constant ctrl_cdiv0_c       : natural := 23; -- r/w: clock divider bit 0
+  constant ctrl_cdiv1_c       : natural := 24; -- r/w: clock divider bit 1
+  constant ctrl_cdiv2_c       : natural := 25; -- r/w: clock divider bit 2
+  constant ctrl_cdiv3_c       : natural := 26; -- r/w: clock divider bit 3
   --
   constant ctrl_phy_busy_c    : natural := 30; -- r/-: SPI PHY is busy when set
   constant ctrl_xip_busy_c    : natural := 31; -- r/-: XIP access in progress
   --
-  signal ctrl : std_ulogic_vector(27 downto 0);
+  signal ctrl : std_ulogic_vector(26 downto 0);
 
   -- Direct SPI access registers --
   signal spi_data_lo : std_ulogic_vector(31 downto 0);
@@ -131,38 +81,41 @@ architecture neorv32_xip_rtl of neorv32_xip is
     state_nxt      : arbiter_state_t;
     addr           : std_ulogic_vector(31 downto 0);
     addr_lookahead : std_ulogic_vector(31 downto 0);
+    xip_acc_err    : std_ulogic;
     busy           : std_ulogic;
-    tmo_cnt        : std_ulogic_vector(04 downto 0); -- timeout counter for auto CS de-assert (burst mode only)
+    tmo_cnt        : std_ulogic_vector(2 downto 0); -- timeout counter for auto CS de-assert (burst mode only)
   end record;
   signal arbiter : arbiter_t;
 
-  -- SPI clock --
+  -- Clock generator --
+  signal cdiv_cnt   : std_ulogic_vector(3 downto 0);
   signal spi_clk_en : std_ulogic;
 
   -- Component: SPI PHY --
   component neorv32_xip_phy
-  port (
-    -- global control --
-    clk_i        : in  std_ulogic; -- clock
-    spi_clk_en_i : in  std_ulogic; -- pre-scaled SPI clock-enable
-    -- operation configuration --
-    cf_enable_i  : in  std_ulogic; -- module enable (reset if low)
-    cf_cpha_i    : in  std_ulogic; -- clock phase
-    cf_cpol_i    : in  std_ulogic; -- clock idle polarity
-    -- operation control --
-    op_start_i   : in  std_ulogic; -- trigger new transmission
-    op_final_i   : in  std_ulogic; -- end current transmission
-    op_csen_i    : in  std_ulogic; -- actually enabled device for transmission
-    op_busy_o    : out std_ulogic; -- transmission in progress when set
-    op_nbytes_i  : in  std_ulogic_vector(03 downto 0); -- actual number of bytes to transmit (1..9)
-    op_wdata_i   : in  std_ulogic_vector(71 downto 0); -- write data
-    op_rdata_o   : out std_ulogic_vector(31 downto 0); -- read data
-    -- SPI interface --
-    spi_csn_o    : out std_ulogic;
-    spi_clk_o    : out std_ulogic;
-    spi_data_i   : in  std_ulogic;
-    spi_data_o   : out std_ulogic
-  );
+    port (
+      -- global control --
+      rstn_i       : in  std_ulogic; -- reset, async, low-active
+      clk_i        : in  std_ulogic; -- clock
+      spi_clk_en_i : in  std_ulogic; -- pre-scaled SPI clock-enable
+      -- operation configuration --
+      cf_enable_i  : in  std_ulogic; -- module enable (reset if low)
+      cf_cpha_i    : in  std_ulogic; -- clock phase
+      cf_cpol_i    : in  std_ulogic; -- clock idle polarity
+      -- operation control --
+      op_start_i   : in  std_ulogic; -- trigger new transmission
+      op_final_i   : in  std_ulogic; -- end current transmission
+      op_csen_i    : in  std_ulogic; -- actually enabled device for transmission
+      op_busy_o    : out std_ulogic; -- transmission in progress when set
+      op_nbytes_i  : in  std_ulogic_vector(3 downto 0); -- actual number of bytes to transmit (1..9)
+      op_wdata_i   : in  std_ulogic_vector(71 downto 0); -- write data
+      op_rdata_o   : out std_ulogic_vector(31 downto 0); -- read data
+      -- SPI interface --
+      spi_csn_o    : out std_ulogic;
+      spi_clk_o    : out std_ulogic;
+      spi_dat_i    : in  std_ulogic;
+      spi_dat_o    : out std_ulogic
+    );
   end component;
 
   -- SPI PHY interface --
@@ -177,98 +130,81 @@ architecture neorv32_xip_rtl of neorv32_xip is
 
 begin
 
-  -- Access Control (IO/CTRL port) ----------------------------------------------------------
+  -- Control Bus Access ---------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  ct_acc_en <= '1' when (ct_addr_i(hi_abb_c downto lo_abb_c) = xip_base_c(hi_abb_c downto lo_abb_c)) else '0';
-  ct_addr   <= xip_base_c(31 downto lo_abb_c) & ct_addr_i(lo_abb_c-1 downto 2) & "00"; -- word aligned
-  ct_wren   <= ct_acc_en and ct_wren_i;
-  ct_rden   <= ct_acc_en and ct_rden_i;
-
-
-  -- Control Read/Write Access --------------------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  ctrl_rw_access : process(rstn_i, clk_i)
+  ctrl_bus_access : process(rstn_i, clk_i)
   begin
     if (rstn_i = '0') then
+      bus_rsp_o   <= rsp_terminate_c;
       ctrl        <= (others => '0');
-      spi_data_lo <= (others => '-');
-      spi_data_hi <= (others => '-');
-      spi_trigger <= '-';
-      --
-      ct_data_o   <= (others => '-');
-      ct_ack_o    <= '-';
+      spi_data_lo <= (others => '0');
+      spi_data_hi <= (others => '0');
+      spi_trigger <= '0';
     elsif rising_edge(clk_i) then
-      -- access acknowledge --
-      ct_ack_o <= ct_wren or ct_rden;
+      -- bus handshake --
+      bus_rsp_o.ack  <= bus_req_i.stb;
+      bus_rsp_o.err  <= '0';
+      bus_rsp_o.data <= (others => '0');
 
       -- defaults --
       spi_trigger <= '0';
 
-      -- write access --
-      if (ct_wren = '1') then -- only full-word writes!
+      if (bus_req_i.stb = '1') then
 
-        -- control register --
-        if (ct_addr = xip_ctrl_addr_c) then
-          ctrl(ctrl_enable_c)                                <= ct_data_i(ctrl_enable_c);
-          ctrl(ctrl_spi_prsc2_c downto ctrl_spi_prsc0_c)     <= ct_data_i(ctrl_spi_prsc2_c downto ctrl_spi_prsc0_c);
-          ctrl(ctrl_spi_cpol_c)                              <= ct_data_i(ctrl_spi_cpol_c);
-          ctrl(ctrl_spi_cpha_c)                              <= ct_data_i(ctrl_spi_cpha_c);
-          ctrl(ctrl_spi_nbytes3_c downto ctrl_spi_nbytes0_c) <= ct_data_i(ctrl_spi_nbytes3_c downto ctrl_spi_nbytes0_c);
-          ctrl(ctrl_xip_enable_c)                            <= ct_data_i(ctrl_xip_enable_c);
-          ctrl(ctrl_xip_abytes1_c downto ctrl_xip_abytes0_c) <= ct_data_i(ctrl_xip_abytes1_c downto ctrl_xip_abytes0_c);
-          ctrl(ctrl_rd_cmd7_c downto ctrl_rd_cmd0_c)         <= ct_data_i(ctrl_rd_cmd7_c downto ctrl_rd_cmd0_c);
-          ctrl(ctrl_page3_c downto ctrl_page0_c)             <= ct_data_i(ctrl_page3_c downto ctrl_page0_c);
-          ctrl(ctrl_spi_csen_c)                              <= ct_data_i(ctrl_spi_csen_c);
-          ctrl(ctrl_highspeed_c)                             <= ct_data_i(ctrl_highspeed_c);
-          ctrl(ctrl_burst_en_c)                              <= ct_data_i(ctrl_burst_en_c);
+        -- write access --
+        if (bus_req_i.rw = '1') then
+          -- control register --
+          if (bus_req_i.addr(3 downto 2) = "00") then
+            ctrl(ctrl_enable_c)                                <= bus_req_i.data(ctrl_enable_c);
+            ctrl(ctrl_spi_prsc2_c downto ctrl_spi_prsc0_c)     <= bus_req_i.data(ctrl_spi_prsc2_c downto ctrl_spi_prsc0_c);
+            ctrl(ctrl_spi_cpol_c)                              <= bus_req_i.data(ctrl_spi_cpol_c);
+            ctrl(ctrl_spi_cpha_c)                              <= bus_req_i.data(ctrl_spi_cpha_c);
+            ctrl(ctrl_spi_nbytes3_c downto ctrl_spi_nbytes0_c) <= bus_req_i.data(ctrl_spi_nbytes3_c downto ctrl_spi_nbytes0_c);
+            ctrl(ctrl_xip_enable_c)                            <= bus_req_i.data(ctrl_xip_enable_c);
+            ctrl(ctrl_xip_abytes1_c downto ctrl_xip_abytes0_c) <= bus_req_i.data(ctrl_xip_abytes1_c downto ctrl_xip_abytes0_c);
+            ctrl(ctrl_rd_cmd7_c downto ctrl_rd_cmd0_c)         <= bus_req_i.data(ctrl_rd_cmd7_c downto ctrl_rd_cmd0_c);
+            ctrl(ctrl_spi_csen_c)                              <= bus_req_i.data(ctrl_spi_csen_c);
+            ctrl(ctrl_highspeed_c)                             <= bus_req_i.data(ctrl_highspeed_c);
+            ctrl(ctrl_cdiv3_c downto ctrl_cdiv0_c)             <= bus_req_i.data(ctrl_cdiv3_c downto ctrl_cdiv0_c);
+          end if;
+          -- SPI direct data access register lo --
+          if (bus_req_i.addr(3 downto 2) = "10") then
+            spi_data_lo <= bus_req_i.data;
+          end if;
+          -- SPI direct data access register hi --
+          if (bus_req_i.addr(3 downto 2) = "11") then
+            spi_data_hi <= bus_req_i.data;
+            spi_trigger <= '1'; -- trigger direct SPI transaction
+          end if;
+
+        -- read access --
+        else
+          case bus_req_i.addr(3 downto 2) is
+            when "00" => -- 'xip_ctrl_addr_c' - control register
+              bus_rsp_o.data(ctrl_enable_c)                                <= ctrl(ctrl_enable_c);
+              bus_rsp_o.data(ctrl_spi_prsc2_c downto ctrl_spi_prsc0_c)     <= ctrl(ctrl_spi_prsc2_c downto ctrl_spi_prsc0_c);
+              bus_rsp_o.data(ctrl_spi_cpol_c)                              <= ctrl(ctrl_spi_cpol_c);
+              bus_rsp_o.data(ctrl_spi_cpha_c)                              <= ctrl(ctrl_spi_cpha_c);
+              bus_rsp_o.data(ctrl_spi_nbytes3_c downto ctrl_spi_nbytes0_c) <= ctrl(ctrl_spi_nbytes3_c downto ctrl_spi_nbytes0_c);
+              bus_rsp_o.data(ctrl_xip_enable_c)                            <= ctrl(ctrl_xip_enable_c);
+              bus_rsp_o.data(ctrl_xip_abytes1_c downto ctrl_xip_abytes0_c) <= ctrl(ctrl_xip_abytes1_c downto ctrl_xip_abytes0_c);
+              bus_rsp_o.data(ctrl_rd_cmd7_c downto ctrl_rd_cmd0_c)         <= ctrl(ctrl_rd_cmd7_c downto ctrl_rd_cmd0_c);
+              bus_rsp_o.data(ctrl_spi_csen_c)                              <= ctrl(ctrl_spi_csen_c);
+              bus_rsp_o.data(ctrl_highspeed_c)                             <= ctrl(ctrl_highspeed_c);
+              bus_rsp_o.data(ctrl_cdiv3_c downto ctrl_cdiv0_c)             <= ctrl(ctrl_cdiv3_c downto ctrl_cdiv0_c);
+              --
+              bus_rsp_o.data(ctrl_phy_busy_c) <= phy_if.busy;
+              bus_rsp_o.data(ctrl_xip_busy_c) <= arbiter.busy;
+            when "10" => -- 'xip_data_lo_addr_c' - SPI direct data access register lo
+              bus_rsp_o.data <= phy_if.rdata;
+            when others => -- unavailable (not implemented or write-only)
+              bus_rsp_o.data <= (others => '0');
+          end case;
         end if;
 
-        -- SPI direct data access register lo --
-        if (ct_addr = xip_data_lo_addr_c) then
-          spi_data_lo <= ct_data_i;
-        end if;
-
-        -- SPI direct data access register hi --
-        if (ct_addr = xip_data_hi_addr_c) then
-          spi_data_hi <= ct_data_i;
-          spi_trigger <= '1'; -- trigger direct SPI transaction
-        end if;
-      end if;
-
-      -- read access --
-      ct_data_o <= (others => '0');
-      if (ct_rden = '1') then
-        case ct_addr(3 downto 2) is
-          when "00" => -- 'xip_ctrl_addr_c' - control register
-            ct_data_o(ctrl_enable_c)                                <= ctrl(ctrl_enable_c);
-            ct_data_o(ctrl_spi_prsc2_c downto ctrl_spi_prsc0_c)     <= ctrl(ctrl_spi_prsc2_c downto ctrl_spi_prsc0_c);
-            ct_data_o(ctrl_spi_cpol_c)                              <= ctrl(ctrl_spi_cpol_c);
-            ct_data_o(ctrl_spi_cpha_c)                              <= ctrl(ctrl_spi_cpha_c);
-            ct_data_o(ctrl_spi_nbytes3_c downto ctrl_spi_nbytes0_c) <= ctrl(ctrl_spi_nbytes3_c downto ctrl_spi_nbytes0_c);
-            ct_data_o(ctrl_xip_enable_c)                            <= ctrl(ctrl_xip_enable_c);
-            ct_data_o(ctrl_xip_abytes1_c downto ctrl_xip_abytes0_c) <= ctrl(ctrl_xip_abytes1_c downto ctrl_xip_abytes0_c);
-            ct_data_o(ctrl_rd_cmd7_c downto ctrl_rd_cmd0_c)         <= ctrl(ctrl_rd_cmd7_c downto ctrl_rd_cmd0_c);
-            ct_data_o(ctrl_page3_c downto ctrl_page0_c)             <= ctrl(ctrl_page3_c downto ctrl_page0_c);
-            ct_data_o(ctrl_spi_csen_c)                              <= ctrl(ctrl_spi_csen_c);
-            ct_data_o(ctrl_highspeed_c)                             <= ctrl(ctrl_highspeed_c);
-            ct_data_o(ctrl_burst_en_c)                              <= ctrl(ctrl_burst_en_c);
-            --
-            ct_data_o(ctrl_phy_busy_c) <= phy_if.busy;
-            ct_data_o(ctrl_xip_busy_c) <= arbiter.busy;
-          when "10" => -- 'xip_data_lo_addr_c' - SPI direct data access register lo
-            ct_data_o <= phy_if.rdata;
-          when others => -- unavailable (not implemented or write-only)
-            ct_data_o <= (others => '0');
-        end case;
       end if;
     end if;
-  end process ctrl_rw_access;
-
-  -- XIP enabled --
-  xip_en_o <= ctrl(ctrl_enable_c);
-
-  -- XIP page output --
-  xip_page_o <= ctrl(ctrl_page3_c downto ctrl_page0_c);
+  end process ctrl_bus_access;
 
 
   -- XIP Address Computation Logic ----------------------------------------------------------
@@ -290,9 +226,15 @@ begin
 
   -- SPI Access Arbiter ---------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  arbiter_sync: process(clk_i)
+  arbiter_sync: process(rstn_i, clk_i)
   begin
-    if rising_edge(clk_i) then
+    if (rstn_i = '0') then
+      arbiter.state          <= S_DIRECT;
+      arbiter.addr           <= (others => '0');
+      arbiter.addr_lookahead <= (others => '0');
+      arbiter.xip_acc_err    <= '0';
+      arbiter.tmo_cnt        <= (others => '0');
+    elsif rising_edge(clk_i) then
       -- state control --
       if (ctrl(ctrl_enable_c) = '0') or (ctrl(ctrl_xip_enable_c) = '0') then -- sync reset
         arbiter.state <= S_DIRECT;
@@ -300,10 +242,16 @@ begin
         arbiter.state <= arbiter.state_nxt;
       end if;
       -- address look-ahead --
-      if (acc_rden_i = '1') and (acc_addr_i(31 downto 28) = ctrl(ctrl_page3_c downto ctrl_page0_c)) then
-        arbiter.addr <= acc_addr_i; -- buffer address (reducing fan-out on CPU's address net)
+      if (xip_req_i.stb = '1') and (xip_req_i.rw = '0') then
+        arbiter.addr <= xip_req_i.addr; -- buffer address (reducing fan-out on CPU's address net)
       end if;
       arbiter.addr_lookahead <= std_ulogic_vector(unsigned(arbiter.addr) + 4); -- prefetch address of *next* linear access
+      -- XIP access error? --
+      if (arbiter.state = S_DIRECT) then
+        arbiter.xip_acc_err <= xip_req_i.stb;
+      else
+        arbiter.xip_acc_err <= '0';
+      end if;
       -- pending flash access timeout --
       if (ctrl(ctrl_enable_c) = '0') or (ctrl(ctrl_xip_enable_c) = '0') or (arbiter.state = S_BUSY) then -- sync reset
         arbiter.tmo_cnt <= (others => '0');
@@ -315,19 +263,19 @@ begin
 
 
   -- FSM - combinatorial part --
-  arbiter_comb: process(arbiter, ctrl, xip_addr, phy_if, acc_rden_i, acc_wren_i, acc_addr_i, spi_data_hi, spi_data_lo, spi_trigger)
+  arbiter_comb: process(arbiter, ctrl, xip_addr, phy_if, xip_req_i, spi_data_hi, spi_data_lo, spi_trigger)
   begin
     -- arbiter defaults --
     arbiter.state_nxt <= arbiter.state;
 
     -- bus interface defaults --
-    acc_data_o <= (others => '0');
-    acc_ack_o  <= '0';
-    acc_err_o  <= '0';
+    xip_rsp_o.data <= (others => '0');
+    xip_rsp_o.ack  <= '0';
+    xip_rsp_o.err  <= arbiter.xip_acc_err;
 
     -- SPI PHY interface defaults --
     phy_if.start <= '0';
-    phy_if.final <= arbiter.tmo_cnt(arbiter.tmo_cnt'left) or (not ctrl(ctrl_burst_en_c)); -- terminate if timeout or if burst mode not enabled
+    phy_if.final <= arbiter.tmo_cnt(arbiter.tmo_cnt'left) or (not bool_to_ulogic_f(XIP_CACHE_EN)); -- terminate if timeout or if burst mode not enabled
     phy_if.wdata <= ctrl(ctrl_rd_cmd7_c downto ctrl_rd_cmd0_c) & xip_addr & x"00000000"; -- MSB-aligned: CMD + address + 32-bit zero data
 
     -- fsm --
@@ -342,17 +290,17 @@ begin
 
       when S_IDLE => -- wait for new bus request
       -- ------------------------------------------------------------
-        if (acc_addr_i(31 downto 28) = ctrl(ctrl_page3_c downto ctrl_page0_c)) then
-          if (acc_rden_i = '1') then
+        if (xip_req_i.stb = '1') then
+          if (xip_req_i.rw = '0') then
             arbiter.state_nxt <= S_CHECK;
-          elsif (acc_wren_i = '1') then
+          else
             arbiter.state_nxt <= S_ERROR;
           end if;
         end if;
 
       when S_CHECK => -- check if we can resume flash access
       -- ------------------------------------------------------------
-        if (arbiter.addr(27 downto 2) = arbiter.addr_lookahead(27 downto 2)) and (ctrl(ctrl_burst_en_c) = '1') and -- access to *next linear* address
+        if (arbiter.addr(27 downto 2) = arbiter.addr_lookahead(27 downto 2)) and XIP_CACHE_EN and -- access to *next linear* address
            (arbiter.tmo_cnt(arbiter.tmo_cnt'left) = '0') then -- no "pending access" timeout yet
           phy_if.start      <= '1'; -- resume flash access
           arbiter.state_nxt <= S_BUSY;
@@ -368,15 +316,15 @@ begin
 
       when S_BUSY => -- wait for PHY to complete operation
       -- ------------------------------------------------------------
-        acc_data_o <= bswap32_f(phy_if.rdata); -- convert incrementing byte-read to little-endian
+        xip_rsp_o.data <= bswap_f(phy_if.rdata); -- convert incrementing byte-read to little-endian
         if (phy_if.busy = '0') then
-          acc_ack_o         <= '1';
+          xip_rsp_o.ack     <= '1';
           arbiter.state_nxt <= S_IDLE;
         end if;
 
       when S_ERROR => -- access error
       -- ------------------------------------------------------------
-        acc_err_o         <= '1';
+        xip_rsp_o.err     <= '1';
         arbiter.state_nxt <= S_IDLE;
 
       when others => -- undefined
@@ -389,17 +337,32 @@ begin
   -- arbiter status --
   arbiter.busy <= '1' when (arbiter.state = S_TRIG) or (arbiter.state = S_BUSY) else '0'; -- actual XIP access in progress
 
-  -- status output --
-  xip_acc_o <= arbiter.busy;
-
 
   -- SPI Clock Generator --------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
+  clock_generator: process(rstn_i, clk_i)
+  begin
+    if (rstn_i = '0') then
+      spi_clk_en <= '0';
+      cdiv_cnt   <= (others => '0');
+    elsif rising_edge(clk_i) then
+      spi_clk_en <= '0'; -- default
+      if (ctrl(ctrl_enable_c) = '0') then -- reset/disabled
+        cdiv_cnt <= (others => '0');
+      elsif (clkgen_i(to_integer(unsigned(ctrl(ctrl_spi_prsc2_c downto ctrl_spi_prsc0_c)))) = '1') or
+            (ctrl(ctrl_highspeed_c) = '1') then -- pre-scaled clock
+        if (cdiv_cnt = ctrl(ctrl_cdiv3_c downto ctrl_cdiv0_c)) then -- clock divider for fine-tuning
+          spi_clk_en <= '1';
+          cdiv_cnt   <= (others => '0');
+        else
+          cdiv_cnt <= std_ulogic_vector(unsigned(cdiv_cnt) + 1);
+        end if;
+      end if;
+    end if;
+  end process clock_generator;
+
   -- enable clock generator --
   clkgen_en_o <= ctrl(ctrl_enable_c);
-
-  -- clock select --
-  spi_clk_en <= clkgen_i(to_integer(unsigned(ctrl(ctrl_spi_prsc2_c downto ctrl_spi_prsc0_c)))) or ctrl(ctrl_highspeed_c);
 
 
   -- SPI Physical Interface -----------------------------------------------------------------
@@ -407,6 +370,7 @@ begin
   neorv32_xip_phy_inst: neorv32_xip_phy
   port map (
     -- global control --
+    rstn_i       => rstn_i,
     clk_i        => clk_i,
     spi_clk_en_i => spi_clk_en,
     -- operation configuration --
@@ -424,51 +388,23 @@ begin
     -- SPI interface --
     spi_csn_o    => spi_csn_o,
     spi_clk_o    => spi_clk_o,
-    spi_data_i   => spi_data_i,
-    spi_data_o   => spi_data_o
+    spi_dat_i    => spi_dat_i,
+    spi_dat_o    => spi_dat_o
   );
 
 
 end neorv32_xip_rtl;
 
 
--- ############################################################################################################################
--- ############################################################################################################################
-
-
--- #################################################################################################
--- # << NEORV32 - XIP Module - SPI Physical Interface >>                                           #
--- # ********************************************************************************************* #
--- # BSD 3-Clause License                                                                          #
--- #                                                                                               #
--- # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
--- #                                                                                               #
--- # Redistribution and use in source and binary forms, with or without modification, are          #
--- # permitted provided that the following conditions are met:                                     #
--- #                                                                                               #
--- # 1. Redistributions of source code must retain the above copyright notice, this list of        #
--- #    conditions and the following disclaimer.                                                   #
--- #                                                                                               #
--- # 2. Redistributions in binary form must reproduce the above copyright notice, this list of     #
--- #    conditions and the following disclaimer in the documentation and/or other materials        #
--- #    provided with the distribution.                                                            #
--- #                                                                                               #
--- # 3. Neither the name of the copyright holder nor the names of its contributors may be used to  #
--- #    endorse or promote products derived from this software without specific prior written      #
--- #    permission.                                                                                #
--- #                                                                                               #
--- # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS   #
--- # OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF               #
--- # MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE    #
--- # COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,     #
--- # EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE #
--- # GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED    #
--- # AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING     #
--- # NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED  #
--- # OF THE POSSIBILITY OF SUCH DAMAGE.                                                            #
--- # ********************************************************************************************* #
--- # The NEORV32 Processor - https://github.com/stnolting/neorv32              (c) Stephan Nolting #
--- #################################################################################################
+-- ================================================================================ --
+-- NEORV32 SoC - XIP Module - SPI Physical Interface                                --
+-- -------------------------------------------------------------------------------- --
+-- The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              --
+-- Copyright (c) NEORV32 contributors.                                              --
+-- Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  --
+-- Licensed under the BSD-3-Clause license, see LICENSE for details.                --
+-- SPDX-License-Identifier: BSD-3-Clause                                            --
+-- ================================================================================ --
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -480,6 +416,7 @@ use neorv32.neorv32_package.all;
 entity neorv32_xip_phy is
   port (
     -- global control --
+    rstn_i       : in  std_ulogic; -- reset, async, low-active
     clk_i        : in  std_ulogic; -- clock
     spi_clk_en_i : in  std_ulogic; -- pre-scaled SPI clock-enable
     -- operation configuration --
@@ -491,14 +428,14 @@ entity neorv32_xip_phy is
     op_final_i   : in  std_ulogic; -- end current transmission
     op_csen_i    : in  std_ulogic; -- actually enabled device for transmission
     op_busy_o    : out std_ulogic; -- transmission in progress when set
-    op_nbytes_i  : in  std_ulogic_vector(03 downto 0); -- actual number of bytes to transmit (1..9)
+    op_nbytes_i  : in  std_ulogic_vector(3 downto 0); -- actual number of bytes to transmit (1..9)
     op_wdata_i   : in  std_ulogic_vector(71 downto 0); -- write data
     op_rdata_o   : out std_ulogic_vector(31 downto 0); -- read data
     -- SPI interface --
     spi_csn_o    : out std_ulogic;
     spi_clk_o    : out std_ulogic;
-    spi_data_i   : in  std_ulogic;
-    spi_data_o   : out std_ulogic
+    spi_dat_i    : in  std_ulogic;
+    spi_dat_o    : out std_ulogic
   );
 end neorv32_xip_phy;
 
@@ -519,9 +456,17 @@ begin
 
   -- Serial Interface Engine ----------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  serial_engine: process(clk_i)
+  serial_engine: process(rstn_i, clk_i)
   begin
-    if rising_edge(clk_i) then
+    if (rstn_i = '0') then
+      spi_clk_o    <= '0';
+      spi_csn_o    <= '1';
+      ctrl.state   <= S_IDLE;
+      ctrl.csen    <= '0';
+      ctrl.sreg    <= (others => '0');
+      ctrl.bitcnt  <= (others => '0');
+      ctrl.di_sync <= '0';
+    elsif rising_edge(clk_i) then
       if (cf_enable_i = '0') then -- sync reset
         spi_clk_o    <= '0';
         spi_csn_o    <= '1';
@@ -554,7 +499,6 @@ begin
           -- ------------------------------------------------------------
             spi_csn_o   <= not ctrl.csen; -- keep CS active
             ctrl.bitcnt <= "0100000"; -- 4 bytes = 32-bit read data
- --         ctrl.sreg   <= (others => '0'); -- do we need this???
             if (op_final_i = '1') then -- terminate pending flash access
               ctrl.state  <= S_IDLE;
             elsif (op_start_i = '1') then -- resume flash access
@@ -575,7 +519,7 @@ begin
           -- ------------------------------------------------------------
             if (spi_clk_en_i = '1') then
               spi_clk_o    <= not (cf_cpha_i xor cf_cpol_i);
-              ctrl.di_sync <= spi_data_i;
+              ctrl.di_sync <= spi_dat_i;
               ctrl.bitcnt  <= std_ulogic_vector(unsigned(ctrl.bitcnt) - 1);
               ctrl.state   <= S_RTX_B;
             end if;
@@ -612,7 +556,7 @@ begin
   op_busy_o <= '0' when (ctrl.state = S_IDLE) or (ctrl.state = S_WAIT) else '1';
 
   -- serial data output --
-  spi_data_o <= ctrl.sreg(ctrl.sreg'left);
+  spi_dat_o <= ctrl.sreg(ctrl.sreg'left);
 
   -- RX data --
   op_rdata_o <= ctrl.sreg(31 downto 0);

@@ -5,159 +5,142 @@
 [cols="<3,<3,<4"]
 [frame="topbot",grid="none"]
 |=======================
-| Hardware source file(s): | neorv32_slink.vhd |
-| Software driver file(s): | neorv32_slink.c |
-|                          | neorv32_slink.h |
-| Top entity port:         | `slink_tx_dat_o` | TX link data (8x32-bit)
-|                          | `slink_tx_val_o` | TX link data valid (8x1-bit)
-|                          | `slink_tx_rdy_i` | TX link allowed to send (8x1-bit)
-|                          | `slink_tx_lst_o` | TX link end of packet (8x1-bit)
-|                          | `slink_rx_dat_i` | RX link data (8x32-bit)
-|                          | `slink_rx_val_i` | RX link data valid (8x1-bit)
-|                          | `slink_rx_rdy_o` | RX link ready to receive (8x1-bit)
-|                          | `slink_rx_lst_i` | RX link end of packet (8x1-bit)
-| Configuration generics:  | _SLINK_NUM_TX_  | Number of TX links to implement (0..8)
-|                          | _SLINK_NUM_RX_  | Number of RX links to implement (0..8)
-|                          | _SLINK_TX_FIFO_ | FIFO depth (1..32k) of TX links, has to be a power of two
-|                          | _SLINK_RX_FIFO_ | FIFO depth (1..32k) of RX links, has to be a power of two
-| CPU interrupts:          | fast IRQ channel 10 | SLINK RX IRQ (see <<_processor_interrupts>>)
-|                          | fast IRQ channel 11 | SLINK TX IRQ (see <<_processor_interrupts>>)
+| Hardware source files:  | neorv32_slink.vhd   |
+| Software driver files:  | neorv32_slink.c     |
+|                         | neorv32_slink.h     |
+| Top entity ports:       | `slink_rx_dat_i`    | RX link data (32-bit)
+|                         | `slink_rx_src_i`    | RX routing information (4-bit)
+|                         | `slink_rx_val_i`    | RX link data valid (1-bit)
+|                         | `slink_rx_lst_i`    | RX link last element of stream (1-bit)
+|                         | `slink_rx_rdy_o`    | RX link ready to receive (1-bit)
+|                         | `slink_tx_dat_o`    | TX link data (32-bit)
+|                         | `slink_tx_dst_o`    | TX routing information (4-bit)
+|                         | `slink_tx_val_o`    | TX link data valid (1-bit)
+|                         | `slink_tx_lst_o`    | TX link last element of stream (1-bit)
+|                         | `slink_tx_rdy_i`    | TX link allowed to send (1-bit)
+| Configuration generics: | `IO_SLINK_EN`       | implement SLINK when _true_
+|                         | `IO_SLINK_RX_FIFO`  | RX FIFO depth (1..32k), has to be a power of two, min 1
+|                         | `IO_SLINK_TX_FIFO`  | TX FIFO depth (1..32k), has to be a power of two, min 1
+| CPU interrupts:         | fast IRQ channel 14 | RX SLINK IRQ (see <<_processor_interrupts>>)
+|                         | fast IRQ channel 15 | TX SLINK IRQ (see <<_processor_interrupts>>)
+| Access restrictions:  2+| non-32-bit write accesses are ignored
 |=======================
 
 
 **Overview**
 
-The SLINK component provides up to 8 independent RX (receiving) and TX (sending) links for moving
-stream data. The interface provides higher bandwidth and less latency than the external memory bus
-interface, which makes it ideally suited to couple custom stream processing units.
-
-Each link provides an individual internal FIFO for data buffering. The FIFO depth is globally defined
-for all TX links via the _SLINK_TX_FIFO_ generic and for all RX links via the _SLINK_RX_FIFO_ generic.
-The FIFO depth has to be at least 1, which will implement a simple input/output register. The maximum
-value is limited to 32768 entries. Note that the FIFO depth has to be a power of two.
-
-The actual number of implemented RX/TX links is configured by the _SLINK_NUM_RX_ and _SLINK_NUM_TX_
-generics, respectively. The SLINK module will be synthesized only if at least one of these generics is greater than
-zero. All unimplemented links are internally terminated and their according output signals are set to zero.
-
-[NOTE]
-The NEORV32 stream link interfaces are compatible to the _AXI Stream_ specs.
+The stream link interface provides independent RX and TX channels for sending and receiving
+stream data. Each channel features a configurable internal FIFO to buffer stream data
+(`IO_SLINK_RX_FIFO` for the RX FIFO, `IO_SLINK_TX_FIFO` for the TX FIFO). The SLINK interface provides higher
+bandwidth and less latency than the external bus interface making it ideally suited for coupling custom
+stream processors or streaming peripherals.
 
 .Example Program
 [TIP]
 An example program for the SLINK module is available in `sw/example/demo_slink`.
 
 
-**Theory of Operation**
-
-The SLINK provides eight data registers (`DATA[i]`) to access the links (read accesses will access the RX link FIFOs,
-write accesses will access the TX link FIFOs), one control register (`CTRL`), one interrupt configuration register (`IRQ`)
-and two status registers - one for the RX links (`RX_STATUS`) and one for the TX links (`TX_STATUS`).
-
-The SLINK is globally activated by setting the control register's enable bit _SLINK_CTRL_EN_. Clearing this
-bit will reset all internal logic and will also clear all FIFOs. The actual data links are accessed by
-reading or writing the according link data registers `DATA[0]` to `DATA[7]`. For example, writing to `DATA[0]`
-will put the according data into the FIFO of TX link 0. Accordingly, reading from `DATA[0]` will return one data
-word from the FIFO of RX link 0.
-
-The current link status of each RX and TX channel is accessible via the `*X_STATUS` registers. The FIFO's status
-signals that represent the fill level (empty, at least half full, full) are exposed as read-only flags via those two
-registers.
-
-[NOTE]
-Writing to a TX link's FIFO that is _full_ will have no effect. Reading data from a RX link's FIFO that is
-_empty_ will have no effect and will return the last valid data word.
-
-The TX link's "end of packet" signal `slink_tx_lst_o` is controlled by the `TX_STATUS` register's _SLINK_TX_STATUS_LAST_
-bits. Note that these bits are also buffered by the internal TX FIFOs, so setting one of these bits before writing data to
-`DATA` will set the `slink_tx_lst_o` signal when the written data word is actually send from the FIFO. Vice versa, the
-_SLINK_RX_STATUS_LAST_ bits in `RX_STATUS` represent the level of the according `slink_rx_lst_i` input when a new data word
-was samples. These bits are also buffered in the internal RX FIFOs.
-
-
-**Data Transmission**
-
-To send (TX) data the program should ensure there is at least one left in the according link's FIFO by checking
-_SLINK_CTRL_TX_FREE_. To mark the current data word to-be-send as "end of packet" the according _SLINK_TX_STATUS_LAST_
-bit has to be set _before_ writing `DATA`.
-
-Received data (RX) is available when the according link's _SLINK_RX_STATUS_EMPTY_ bit is cleared. To check if the received
-data is marked as "end of packet" the according _SLINK_RX_STATUS_LAST_ bit has to be examined _before_ reading `DATA`.
-
-
 **Interface & Protocol**
 
-The SLINK interface consists of four signals `dat`, `val`, `rdy` and `lst` for each RX and TX link.
-Each signal is constructed as an "array" with eight entries - one for each link. Note that an entry in `slink_*x_dat` is 32-bit
-wide while entries in `slink_*x_val`, `slink_*x_rdy` and `slink_*x_lst` are are just 1-bit wide.
+The SLINK interface consists of four signals for each channel:
 
 * `dat` contains the actual data word
 * `val` marks the current transmission cycle as valid
-* `rdy` indicates that the receiving part is ready to receive
-* `lst` marks the current data word as "end of packet"
+* `lst` marks the current transmission cycle as the last element of a stream
+* `rdy` indicates that the receiver is ready to receive
+* `src` and `dst` provide source/destination routing information (optional)
 
-.Exemplary Stream Link Transfer (transferring 5 elements, element "E" is marked as "end of packet")
-image::stream_link_interface.png[width=560,align=center]
-
-
-**SLINK Interrupts**
-
-The stream interface provides two independent CPU interrupt channels - one for RX conditions and one
-for TX conditions. These IRQs can be used to signal specific FIFO conditions (e.g. "data available") to the
-CPU. The specific interrupt conditions are programmed per-link via the `IRQ` register.
-A 2-bit-coded value is used to enable the according link's interrupt and to specify the actual condition.
-
+.AXI4-Stream Compatibility
 [NOTE]
-Note that all enabled interrupt configurations are logically OR-ed for the CPU RX and TX interrupts, respectively.
-Hence, if **any** link fulfills the according interrupt configuration the according RX/TX interrupt request is
-sent to the CPU.
+The interface names (except for `src` and `dst`) and the underlying protocol is compatible to the AXI4-Stream protocol standard.
+A processor top entity with a AXI4-Stream-compatible interfaces can be found in `rtl/system_inegration`.
+More information regarding this alternate top entity can be found in in the user guide:
+https://stnolting.github.io/neorv32/ug/#_packaging_the_processor_as_vivado_ip_block
 
-For the TX links (in `IRQ` _SLINK_IRQ_TX_) the following interrupt conditions are supported:
 
-* `0-`: off, no interrupt from link
-* `10`: interrupt fires if FIFO _becomes_ not empty
-* `11`: interrupt fires if FIFO _becomes_ at least half full
+**Theory of Operation**
 
-For the RX links (in `IRQ` _SLINK_IRQ_RX_) the following interrupt conditions are supported:
+The SLINK provides four interface registers. The control register (`CTRL`) is used to configure
+the module and to check its status. Two individual data registers (`DATA` and `DATA_LAST`)
+are used to send and receive the link's actual data stream.
 
-* `0-`: off, no interrupt from link
-* `10`: interrupt fires if FIFO _becomes_ empty
-* `11`: interrupt fires if FIFO _becomes_ less than half full
+The `DATA` register provides direct access to the RX/TX FIFO buffers. Read accesses return data from the RX FIFO.
+After reading data from this register the control register's `SLINK_CTRL_RX_LAST` flag can be checked to determine
+if the according data word has been marked as "end of stream" via the `slink_rx_lst_i` signal (this signal is also
+buffered by the link's FIFO).
+Writing to the `DATA` register will immediately write to the TX link FIFO.
+When writing to the `TX_DATA_LAST` the according data word will also be marked as "end of stream" via the
+`slink_tx_lst_o` signal (this signal is also buffered by the link's FIFO).
 
-Once the SLINK's RX or TX CPU interrupt has become pending, it has to be explicitly cleared again by writing
-zero to the according <<_mip>> CSR bit(s).
+The configured FIFO sizes can be retrieved by software via the control register's `SLINK_CTRL_RX_FIFO_*` and
+`SLINK_CTRL_TX_FIFO_*` bits.
+
+The SLINK is globally activated by setting the control register's enable bit `SLINK_CTRL_EN`. Clearing this bit will
+reset all internal logic and will also clear both FIFOs. The FIFOs can also be cleared manually at any time by
+setting the `SLINK_CTRL_RX_CLR` and/or `SLINK_CTRL_TX_CLR` bits (these bits will auto-clear).
+
+.FIFO Overflow
+[NOTE]
+Writing to the TX channel's FIFO while it is _full_ will have no effect. Reading from the RX channel's FIFO while it
+is _empty_ will also have no effect and will return the last received data word. There is no overflow indicator
+implemented yet.
+
+The current status of the RX and TX FIFOs can be determined via the control register's `SLINK_CTRL_RX_*` and
+`SLINK_CTRL_TX_*` flags.
+
+
+**Stream Routing Information**
+
+Both stream link interface provide an optional port for routing information: `slink_tx_dst_o` (AXI stream's `TDEST`)
+can be used to set a destination address when using a switch/interconnect to access several stream sinks. `slink_rx_src_i`
+(AXI stream's `TID`) can be used to determine the source when several sources can send data via a switch/interconnect.
+The routing information can be set/read via the `ROUTE` interface registers. Note that all routing information is also
+fully buffered by the internal RX/TX FIFOs. RX routing information has to be read **after** reading the according RX
+data. Vice versa, TX routing information has to be set **before** writing the according TX data.
+
+
+**Interrupts**
+
+The SLINK module provides two independent interrupt channels: one for RX events and one for TX events.
+The interrupt conditions are based on the according link's FIFO status flags and are configured via the control
+register's `SLINK_CTRL_IRQ_*` flags. The according interrupt will fire when the module is enabled (`SLINK_CTRL_EN`)
+and the selected interrupt conditions are met. Note that all enabled interrupt conditions are logically OR-ed per
+channel. If any enable interrupt conditions becomes active the interrupt will become pending until the
+interrupt-causing condition is resolved (e.g. by reading from the RX FIFO).
 
 
 **Register Map**
 
 .SLINK register map (`struct NEORV32_SLINK`)
-[cols="^4,<5,^2,^2,<14"]
+[cols="<2,<2,<4,^1,<4"]
 [options="header",grid="all"]
 |=======================
 | Address | Name [C] | Bit(s) | R/W | Function
-.6+<| `0xfffffec0` .6+<| `NEORV32_SLINK.CTRL` <| `0`     _SLINK_CTRL_EN_                                     ^| r/w  | SLINK global enable/reset
-                                              <| `7:1`   _reserved_                                          ^| r/- <| _reserved_, returns zero
-                                              <| `19:16` _SLINK_CTRL_RX_NUM_MSB_  : _SLINK_CTRL_RX_NUM_LSB_  ^| r/- <| Number of RX links (_SLINK_NUM_RX_)
-                                              <| `23:20` _SLINK_CTRL_TX_NUM_MSB_  : _SLINK_CTRL_TX_NUM_LSB_  ^| r/- <| Number of TX links (_SLINK_NUM_TX_)
-                                              <| `27:24` _SLINK_CTRL_RX_FIFO_MSB_ : _SLINK_CTRL_RX_FIFO_LSB_ ^| r/- <| RX FIFO depth, log2(_SLINK_RX_FIFO_)
-                                              <| `31:28` _SLINK_CTRL_TX_FIFO_MSB_ : _SLINK_CTRL_TX_FIFO_MSB_ ^| r/- <| TX FIFO depth, log2(_SLINK_TX_FIFO_)
-.2+<| `0xfffffec4` .2+<| `NEORV32_SLINK.IRQ` <|`15:0`  _SLINK_IRQ_RX_MSB_ : _SLINK_IRQ_RX_LSB_ ^| r/w <| RX link _i_ interrupt configuration (2 bits per link)
-                                             <|`31:16` _SLINK_IRQ_TX_MSB_ : _SLINK_IRQ_TX_LSB_ ^| r/w <| TX link _i_ interrupt configuration (2 bits per link)
-.4+<| `0xfffffec8` .4+<| `NEORV32_SLINK.RX_STATUS` <|`7:0`   _SLINK_RX_STATUS_EMPTY_MSB_ : _SLINK_RX_STATUS_EMPTY_LSB_ ^| r/- <| RX link _i_ FIFO empty
-                                                   <|`15:8`  _SLINK_RX_STATUS_HALF_MSB_  : _SLINK_RX_STATUS_HALF_LSB_  ^| r/- <| RX link _i_ FIFO at least half full
-                                                   <|`23:16` _SLINK_RX_STATUS_FULL_MSB_  : _SLINK_RX_STATUS_FULL_LSB_  ^| r/- <| RX link _i_ FIFO full
-                                                   <|`31:24` _SLINK_RX_STATUS_LAST_MSB_  : _SLINK_RX_STATUS_LAST_LSB_  ^| r/- <| Current data word of RX link _i_ is marked as "end of packet"
-.4+<| `0xfffffecc` .4+<| `NEORV32_SLINK.TX_STATUS` <|`7:0`   _SLINK_TX_STATUS_EMPTY_MSB_ : _SLINK_TX_STATUS_EMPTY_LSB_ ^| r/- <| TX link _i_ FIFO empty
-                                                   <|`15:8`  _SLINK_TX_STATUS_HALF_MSB_  : _SLINK_TX_STATUS_HALF_LSB_  ^| r/- <| TX link _i_ FIFO at least half full
-                                                   <|`23:16` _SLINK_TX_STATUS_FULL_MSB_  : _SLINK_TX_STATUS_FULL_LSB_  ^| r/- <| TX link _i_ FIFO full
-                                                   <|`31:24` _SLINK_TX_STATUS_LAST_MSB_  : _SLINK_TX_STATUS_LAST_LSB_  ^| r/w <| Set to mark next data word of TX link _i_ is "end of packet"
-| `0xfffffed0` : `0xfffffedf` | - |`31:0` | r/- | _reserved_, returns zero
-| `0xfffffee0` | `NEORV32_SLINK.DATA[0]` | `31:0` | r/w | Link 0 RX/TX data
-| `0xfffffee4` | `NEORV32_SLINK.DATA[1]` | `31:0` | r/w | Link 1 RX/TX data
-| `0xfffffee8` | `NEORV32_SLINK.DATA[2]` | `31:0` | r/w | Link 2 RX/TX data
-| `0xfffffeec` | `NEORV32_SLINK.DATA[3]` | `31:0` | r/w | Link 3 RX/TX data
-| `0xfffffef0` | `NEORV32_SLINK.DATA[4]` | `31:0` | r/w | Link 4 RX/TX data
-| `0xfffffef4` | `NEORV32_SLINK.DATA[5]` | `31:0` | r/w | Link 5 RX/TX data
-| `0xfffffef8` | `NEORV32_SLINK.DATA[6]` | `31:0` | r/w | Link 6 RX/TX data
-| `0xfffffefc` | `NEORV32_SLINK.DATA[7]` | `31:0` | r/w | Link 7 RX/TX data
+.22+<| `0xffec0000` .22+<| `CTRL` <| `0`    `SLINK_CTRL_EN`                                    ^| r/w <| SLINK global enable
+                                  <| `1`    `SLINK_CTRL_RX_CLR`                                ^| -/w <| Clear RX FIFO when set (bit auto-clears)
+                                  <| `2`    `SLINK_CTRL_TX_CLR`                                ^| -/w <| Clear TX FIFO when set (bit auto-clears)
+                                  <| `3`    _reserved_                                         ^| r/- <| _reserved_, read as zero
+                                  <| `4`    `SLINK_CTRL_RX_LAST`                               ^| r/- <| Last word read from `RX_DATA` is marked as "end of stream"
+                                  <| `7:5`  _reserved_                                         ^| r/- <| _reserved_, read as zero
+                                  <| `8`    `SLINK_CTRL_RX_EMPTY`                              ^| r/- <| RX FIFO empty
+                                  <| `9`    `SLINK_CTRL_RX_HALF`                               ^| r/- <| RX FIFO at least half full
+                                  <| `10`   `SLINK_CTRL_RX_FULL`                               ^| r/- <| RX FIFO full
+                                  <| `11`   `SLINK_CTRL_TX_EMPTY`                              ^| r/- <| TX FIFO empty
+                                  <| `12`   `SLINK_CTRL_TX_HALF`                               ^| r/- <| TX FIFO at least half full
+                                  <| `13`   `SLINK_CTRL_TX_FULL`                               ^| r/- <| TX FIFO full
+                                  <| `15:14` _reserved_                                        ^| r/- <| _reserved_, read as zero
+                                  <| `16`   `SLINK_CTRL_IRQ_RX_NEMPTY`                         ^| r/w <| RX interrupt if RX FIFO not empty
+                                  <| `17`   `SLINK_CTRL_IRQ_RX_HALF`                           ^| r/w <| RX interrupt if RX FIFO at least half full
+                                  <| `18`   `SLINK_CTRL_IRQ_RX_FULL`                           ^| r/w <| RX interrupt if RX FIFO full
+                                  <| `19`   `SLINK_CTRL_IRQ_TX_EMPTY`                          ^| r/w <| TX interrupt if TX FIFO empty
+                                  <| `20`   `SLINK_CTRL_IRQ_TX_NHALF`                          ^| r/w <| TX interrupt if TX FIFO not at least half full
+                                  <| `21`   `SLINK_CTRL_IRQ_TX_NFULL`                          ^| r/w <| TX interrupt if TX FIFO not full
+                                  <| `23:22` _reserved_                                        ^| r/- <| _reserved_, read as zero
+                                  <| `27:24` `SLINK_CTRL_RX_FIFO_MSB : SLINK_CTRL_RX_FIFO_LSB` ^| r/- <| log2(RX FIFO size)
+                                  <| `31:28` `SLINK_CTRL_TX_FIFO_MSB : SLINK_CTRL_TX_FIFO_LSB` ^| r/- <| log2(TX FIFO size)
+.3+<| `0xffec0004` .3+<| `ROUTE` <| `3:0` | r/w | TX destination routing information (`slink_tx_dst_o`)
+                                 <| `7:4` | r/- | RX source routing information (`slink_rx_src_i`)
+                                 <| `31:8` | -/- | _reserved_
+| `0xffec0008` | `DATA`      | `31:0` | r/w | Write data to TX FIFO; read data from RX FIFO
+| `0xffec000c` | `DATA_LAST` | `31:0` | r/w | Write data to TX FIFO (and also set "last" signal); read data from RX FIFO
 |=======================

@@ -6,7 +6,7 @@
 // # ********************************************************************************************* #
 // # BSD 3-Clause License                                                                          #
 // #                                                                                               #
-// # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
+// # Copyright (c) 2024, Stephan Nolting. All rights reserved.                                     #
 // #                                                                                               #
 // # Redistribution and use in source and binary forms, with or without modification, are          #
 // # permitted provided that the following conditions are met:                                     #
@@ -53,12 +53,7 @@
 #define neorv32_zfinx_extension_intrinsics_h
 
 #define __USE_GNU
-
-#include <fenv.h>
-//#pragma STDC FENV_ACCESS ON
-
 #define _GNU_SOURCE
-
 #include <float.h>
 #include <math.h>
 
@@ -106,56 +101,6 @@ float subnormal_flush(float tmp) {
       res = +0.0f;
     }
   }
-
-  return res;
-}
-
-
-// ################################################################################################
-// Exception access
-// ################################################################################################
-
-/**********************************************************************//**
- * Get exception flags from fflags CSR (floating-point hardware).
- *
- * @return Floating point exception status word.
- **************************************************************************/
-uint32_t get_hw_exceptions(void) {
-
-  uint32_t res = neorv32_cpu_csr_read(CSR_FFLAGS);
-
-  neorv32_cpu_csr_write(CSR_FFLAGS, 0); // clear status word
-
-  return res;
-}
-
-
-/**********************************************************************//**
- * Get exception flags from C runtime (floating-point emulation).
- *
- * @warning WORK-IN-PROGRESS!
- *
- * @return Floating point exception status word.
- **************************************************************************/
-uint32_t get_sw_exceptions(void) {
-
-  const uint32_t FP_EXC_NV_C = 1 << 0; // invalid operation
-  const uint32_t FP_EXC_DZ_C = 1 << 1; // divide by zero
-  const uint32_t FP_EXC_OF_C = 1 << 2; // overflow
-  const uint32_t FP_EXC_UF_C = 1 << 3; // underflow
-  const uint32_t FP_EXC_NX_C = 1 << 4; // inexact
-
-  int fpeRaised = fetestexcept(FE_ALL_EXCEPT);
-
-  uint32_t res = 0;
-
-  if (fpeRaised & FE_INVALID)   { res |= FP_EXC_NV_C; }
-  if (fpeRaised & FE_DIVBYZERO) { res |= FP_EXC_DZ_C; }
-  if (fpeRaised & FE_OVERFLOW)  { res |= FP_EXC_OF_C; }
-  if (fpeRaised & FE_UNDERFLOW) { res |= FP_EXC_UF_C; }
-  if (fpeRaised & FE_INEXACT)   { res |= FP_EXC_NX_C; }
-
-  feclearexcept(FE_ALL_EXCEPT);
 
   return res;
 }
@@ -725,7 +670,7 @@ uint32_t __attribute__ ((noinline)) riscv_emulate_fcvt_wus(float rs1) {
 
   float opa = subnormal_flush(rs1);
 
-  return (uint32_t)roundf(opa);
+  return (uint32_t)rint(opa);
 }
 
 
@@ -739,7 +684,7 @@ int32_t __attribute__ ((noinline)) riscv_emulate_fcvt_ws(float rs1) {
 
   float opa = subnormal_flush(rs1);
 
-  return (int32_t)roundf(opa);
+  return (int32_t)rint(opa);
 }
 
 
@@ -854,8 +799,8 @@ uint32_t __attribute__ ((noinline)) riscv_emulate_fles(float rs1, float rs2) {
  **************************************************************************/
 float __attribute__ ((noinline)) riscv_emulate_fsgnjs(float rs1, float rs2) {
 
-  float opa = subnormal_flush(rs1);
-  float opb = subnormal_flush(rs2);
+  float opa = rs1;
+  float opb = rs2;
 
   int sign_1 = (int)signbit(opa);
   int sign_2 = (int)signbit(opb);
@@ -891,8 +836,8 @@ float __attribute__ ((noinline)) riscv_emulate_fsgnjs(float rs1, float rs2) {
  **************************************************************************/
 float __attribute__ ((noinline)) riscv_emulate_fsgnjns(float rs1, float rs2) {
 
-  float opa = subnormal_flush(rs1);
-  float opb = subnormal_flush(rs2);
+  float opa = rs1;
+  float opb = rs2;
 
   int sign_1 = (int)signbit(opa);
   int sign_2 = (int)signbit(opb);
@@ -928,8 +873,8 @@ float __attribute__ ((noinline)) riscv_emulate_fsgnjns(float rs1, float rs2) {
  **************************************************************************/
 float __attribute__ ((noinline)) riscv_emulate_fsgnjxs(float rs1, float rs2) {
 
-  float opa = subnormal_flush(rs1);
-  float opb = subnormal_flush(rs2);
+  float opa = rs1;
+  float opb = rs2;
 
   int sign_1 = (int)signbit(opa);
   int sign_2 = (int)signbit(opb);
@@ -964,7 +909,7 @@ float __attribute__ ((noinline)) riscv_emulate_fsgnjxs(float rs1, float rs2) {
  **************************************************************************/
 uint32_t __attribute__ ((noinline)) riscv_emulate_fclasss(float rs1) {
 
-  float opa = subnormal_flush(rs1);
+  float opa = rs1;
 
   union {
     uint32_t binary_value; /**< Access as native float */

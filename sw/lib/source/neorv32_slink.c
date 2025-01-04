@@ -1,44 +1,21 @@
-// #################################################################################################
-// # << NEORV32: neorv32_slink.c - Stream Link Interface HW Driver >>                              #
-// # ********************************************************************************************* #
-// # BSD 3-Clause License                                                                          #
-// #                                                                                               #
-// # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
-// #                                                                                               #
-// # Redistribution and use in source and binary forms, with or without modification, are          #
-// # permitted provided that the following conditions are met:                                     #
-// #                                                                                               #
-// # 1. Redistributions of source code must retain the above copyright notice, this list of        #
-// #    conditions and the following disclaimer.                                                   #
-// #                                                                                               #
-// # 2. Redistributions in binary form must reproduce the above copyright notice, this list of     #
-// #    conditions and the following disclaimer in the documentation and/or other materials        #
-// #    provided with the distribution.                                                            #
-// #                                                                                               #
-// # 3. Neither the name of the copyright holder nor the names of its contributors may be used to  #
-// #    endorse or promote products derived from this software without specific prior written      #
-// #    permission.                                                                                #
-// #                                                                                               #
-// # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS   #
-// # OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF               #
-// # MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE    #
-// # COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,     #
-// # EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE #
-// # GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED    #
-// # AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING     #
-// # NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED  #
-// # OF THE POSSIBILITY OF SUCH DAMAGE.                                                            #
-// # ********************************************************************************************* #
-// # The NEORV32 Processor - https://github.com/stnolting/neorv32              (c) Stephan Nolting #
-// #################################################################################################
+// ================================================================================ //
+// The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
+// Copyright (c) NEORV32 contributors.                                              //
+// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Licensed under the BSD-3-Clause license, see LICENSE for details.                //
+// SPDX-License-Identifier: BSD-3-Clause                                            //
+// ================================================================================ //
 
-
-/**********************************************************************//**
+/**
  * @file neorv32_slink.c
  * @brief Stream Link Interface HW driver source file.
- **************************************************************************/
-#include "neorv32.h"
-#include "neorv32_slink.h"
+ *
+ * @note These functions should only be used if the SLINK unit was synthesized (IO_SLINK_EN = true).
+ *
+ * @see https://stnolting.github.io/neorv32/sw/files.html
+ */
+
+#include <neorv32.h>
 
 
 /**********************************************************************//**
@@ -48,7 +25,7 @@
  **************************************************************************/
 int neorv32_slink_available(void) {
 
-  if (NEORV32_SYSINFO.SOC & (1 << SYSINFO_SOC_IO_SLINK)) {
+  if (NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_SLINK)) {
     return 1;
   }
   else {
@@ -58,102 +35,162 @@ int neorv32_slink_available(void) {
 
 
 /**********************************************************************//**
- * Reset and enable SLINK.
+ * Reset, enable and configure SLINK.
  *
- * @param[in] irq_config Configure RX and TX interrupts per link (#NEORV32_SLINK_IRQ_enum).
+ * @param[in] rx_irq Configure RX interrupt conditions (#NEORV32_SLINK_CTRL_enum).
+ * @param[in] tx_irq Configure TX interrupt conditions (#NEORV32_SLINK_CTRL_enum).
  **************************************************************************/
-void neorv32_slink_setup(uint32_t irq_config) {
+void neorv32_slink_setup(uint32_t rx_irq, uint32_t tx_irq) {
 
-  NEORV32_SLINK.CTRL = 0;
-  NEORV32_SLINK.TX_STATUS = 0;
-  NEORV32_SLINK.IRQ = irq_config;
-  NEORV32_SLINK.CTRL = (1 << SLINK_CTRL_EN);
+  NEORV32_SLINK->CTRL = 0; // reset and disable
+
+  const uint32_t rx_irq_mask = (1 << SLINK_CTRL_IRQ_RX_NEMPTY) |
+                               (1 << SLINK_CTRL_IRQ_RX_HALF) |
+                               (1 << SLINK_CTRL_IRQ_RX_FULL);
+  const uint32_t tx_irq_mask = (1 << SLINK_CTRL_IRQ_TX_EMPTY) |
+                               (1 << SLINK_CTRL_IRQ_TX_NHALF) |
+                               (1 << SLINK_CTRL_IRQ_TX_NFULL);
+
+  uint32_t tmp = (uint32_t)(1 << SLINK_CTRL_EN);
+  tmp |= rx_irq & rx_irq_mask;
+  tmp |= tx_irq & tx_irq_mask;
+
+  NEORV32_SLINK->CTRL = tmp;
 }
 
 
 /**********************************************************************//**
- * Activate stream link interface.
+ * Clear RX FIFO.
  **************************************************************************/
-void neorv32_slink_enable(void) {
+void neorv32_slink_rx_clear(void) {
 
-  NEORV32_SLINK.CTRL |= (uint32_t)(1 << SLINK_CTRL_EN);
+  NEORV32_SLINK->CTRL |= 1 << SLINK_CTRL_RX_CLR; // auto-clears
 }
 
 
 /**********************************************************************//**
- * Deactivate stream link interface.
- *
- * @note This will also clear all link FIFOs.
+ * Clear TX FIFO.
  **************************************************************************/
-void neorv32_slink_disable(void) {
+void neorv32_slink_tx_clear(void) {
 
-  NEORV32_SLINK.CTRL &= ~(uint32_t)(1 << SLINK_CTRL_EN);
+  NEORV32_SLINK->CTRL |= 1 << SLINK_CTRL_TX_CLR; // auto-clears
 }
 
 
 /**********************************************************************//**
- * Get number of implemented RX/TX links
+ * Get FIFO depth of RX link.
  *
- * @param[in] sel =0 -> RX, =!0 -> TX
- * @return Number of implemented RX/TX links (0..8).
+ * @return FIFO depth of RX link (1..32768).
  **************************************************************************/
-int neorv32_slink_get_link_num(int sel) {
+int neorv32_slink_get_rx_fifo_depth(void) {
 
-  if (neorv32_slink_available()) {
-    uint32_t tmp = NEORV32_SLINK.CTRL;
-    if (sel) {
-      return (int)((tmp >> SLINK_CTRL_TX_NUM_LSB) & 0x0f);
-    }
-    else {
-      return (int)((tmp >> SLINK_CTRL_RX_NUM_LSB) & 0x0f);
-    }
-  }
-  else {
-    return 0;
-  }
+  uint32_t tmp = (NEORV32_SLINK->CTRL >> SLINK_CTRL_RX_FIFO_LSB) & 0x0f;
+  return (int)(1 << tmp);
 }
 
 
 /**********************************************************************//**
- * Get FIFO depth of RX/TX links
+ * Get FIFO depth of TX link.
  *
- * @param[in] sel =0 -> RX, =!0 -> TX
- * @return FIFO depth of RX/TX links (1..32768); 0 if no RX/TX links implemented.
+ * @return FIFO depth of TX link (1..32768).
  **************************************************************************/
-int neorv32_slink_get_fifo_depth(int sel) {
+int neorv32_slink_get_tx_fifo_depth(void) {
 
-  if (neorv32_slink_available()) {
-    uint32_t tmp = NEORV32_SLINK.CTRL;
-    if (sel) {
-      tmp = (tmp >> SLINK_CTRL_TX_FIFO_LSB) & 0x0f;
-    }
-    else {
-      tmp = (tmp >> SLINK_CTRL_RX_FIFO_LSB) & 0x0f;
-    }
-    return (int)(1 << tmp);
-  }
-  else {
-    return 0;
-  }
+  uint32_t tmp = (NEORV32_SLINK->CTRL >> SLINK_CTRL_TX_FIFO_LSB) & 0x0f;
+  return (int)(1 << tmp);
 }
 
 
 /**********************************************************************//**
- * Write data to TX stream link i (non-blocking)
+ * Read data from RX link (non-blocking)
  *
- * @param[in] link_id Link ID (0..7).
+ * @return Data received from link.
+ **************************************************************************/
+inline uint32_t __attribute__((always_inline)) neorv32_slink_get(void) {
+
+  return NEORV32_SLINK->DATA;
+}
+
+
+/**********************************************************************//**
+ * Check if last RX word has "end-of-stream" delimiter.
+ *
+ * @note This needs has to be called AFTER reading the actual data word
+ * using #neorv32_slink_get(void).
+ *
+ * @return 0 if not end of stream, !=0 if end of stream.
+ **************************************************************************/
+inline uint32_t __attribute__((always_inline)) neorv32_slink_check_last(void) {
+
+  return NEORV32_SLINK->CTRL & (1 << SLINK_CTRL_RX_LAST);
+}
+
+
+/**********************************************************************//**
+ * Set TX link routing destination
+ *
+ * @param[in] dst Routing destination ID (4-bit, LSB-aligned).
+ **************************************************************************/
+inline void __attribute__((always_inline)) neorv32_slink_set_dst(uint32_t dst) {
+
+  NEORV32_SLINK->ROUTE = dst;
+}
+
+
+/**********************************************************************//**
+ * Get RX link routing source
+ *
+ * @note This needs has to be called AFTER reading the actual data word
+ * using #neorv32_slink_get(void).
+ *
+ * @return 4-bit source routing ID.
+ **************************************************************************/
+inline uint32_t __attribute__((always_inline)) neorv32_slink_get_src(void) {
+
+  return (NEORV32_SLINK->ROUTE >> SLINK_ROUTE_SRC_LSB) & 0xF;
+}
+
+
+/**********************************************************************//**
+ * Write data to TX link (non-blocking)
+ *
  * @param[in] tx_data Data to send to link.
- * @param[in] last Set to 1 to indicate this is the "end of packet".
- * @return 0 if data was send, -1 if link is still busy (FIFO full)
  **************************************************************************/
-int neorv32_slink_tx(int link_id, uint32_t tx_data, int last) {
+inline void __attribute__((always_inline)) neorv32_slink_put(uint32_t tx_data) {
 
-  int link_sel = link_id & 7;
+  NEORV32_SLINK->DATA = tx_data;
+}
 
-  if ((NEORV32_SLINK.TX_STATUS & (1 << (SLINK_TX_STATUS_FULL_LSB + link_sel))) == 0) { // free entry?
-    NEORV32_SLINK.TX_STATUS = last << (SLINK_TX_STATUS_LAST_LSB + link_sel); // set if LAST, clear otherwise
-    NEORV32_SLINK.DATA[link_sel] = tx_data;
-    return 0;
+
+/**********************************************************************//**
+ * Write data to TX link (non-blocking) and set "last" (end-of-stream)
+ * delimiter.
+ *
+ * @param[in] tx_data Data to send to link.
+ **************************************************************************/
+inline void __attribute__((always_inline)) neorv32_slink_put_last(uint32_t tx_data) {
+
+  NEORV32_SLINK->DATA_LAST = tx_data;
+}
+
+
+/**********************************************************************//**
+ * Get RX link FIFO status.
+ *
+ * @return FIFO status #NEORV32_SLINK_STATUS_enum.
+ **************************************************************************/
+int neorv32_slink_rx_status(void) {
+
+  uint32_t tmp = NEORV32_SLINK->CTRL;
+
+  if (tmp & (1 << SLINK_CTRL_RX_FULL)) {
+    return SLINK_FIFO_FULL;
+  }
+  else if (tmp & (1 << SLINK_CTRL_RX_HALF)) {
+    return SLINK_FIFO_HALF;
+  }
+  else if (tmp & (1 << SLINK_CTRL_RX_EMPTY)) {
+    return SLINK_FIFO_EMPTY;
   }
   else {
     return -1;
@@ -162,29 +199,24 @@ int neorv32_slink_tx(int link_id, uint32_t tx_data, int last) {
 
 
 /**********************************************************************//**
- * Read data from RX stream link i (non-blocking)
+ * Get TX link FIFO status.
  *
- * @param[in] link_id Link ID (0..7).
- * @param[in] rx_data Pointer for received data.
- * @return 0 if data was received, -1 if no data available, +1 if data was received and
- * data was marked as "end of packet".
+ * @return FIFO status #NEORV32_SLINK_STATUS_enum.
  **************************************************************************/
-int neorv32_slink_rx(int link_id, uint32_t *rx_data) {
+int neorv32_slink_tx_status(void) {
 
-  int link_sel = link_id & 7;
+  uint32_t tmp = NEORV32_SLINK->CTRL;
 
-  uint32_t tmp = NEORV32_SLINK.RX_STATUS; // read flags before doing a RX data access
-
-  if ((tmp & (1 << (SLINK_RX_STATUS_EMPTY_LSB + link_sel))) == 0) { // data available?
-    *rx_data = NEORV32_SLINK.DATA[link_sel];
-    if (tmp & (1 << (SLINK_RX_STATUS_LAST_LSB + link_sel))) { // was "end of packet"?
-      return +1;
-    }
-    else {
-      return 0;
-    }
+  if (tmp & (1 << SLINK_CTRL_TX_FULL)) {
+    return SLINK_FIFO_FULL;
+  }
+  else if (tmp & (1 << SLINK_CTRL_TX_HALF)) {
+    return SLINK_FIFO_HALF;
+  }
+  else if (tmp & (1 << SLINK_CTRL_TX_EMPTY)) {
+    return SLINK_FIFO_EMPTY;
   }
   else {
-  }
     return -1;
+  }
 }

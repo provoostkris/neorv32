@@ -1,650 +1,510 @@
--- #################################################################################################
--- # << NEORV32 - Universal Asynchronous Receiver and Transmitter (UART0/1) >>                     #
--- # ********************************************************************************************* #
--- # Frame configuration: 1 start bit, 8 bit data, parity bit (none/even/odd), 1 stop bit,         #
--- # programmable BAUD rate via clock pre-scaler and 12-bit BAUD value configuration register,     #
--- # optional configurable RX and TX FIFOs.                                                        #
--- #                                                                                               #
--- # Interrupts: Configurable RX and TX interrupt (both triggered by specific FIFO fill-levels)    #
--- #                                                                                               #
--- # Support for RTS("RTR")/CTS hardware flow control:                                             #
--- # * uart_rts_o = 0: RX is ready to receive a new char, enabled via CTRL.ctrl_rts_en_c           #
--- # * uart_cts_i = 0: TX is allowed to send a new char, enabled via CTRL.ctrl_cts_en_c            #
--- #                                                                                               #
--- # UART0 / UART1:                                                                                #
--- # This module is used for implementing UART0 and UART1. The UART_PRIMARY generic configures the #
--- # interface register addresses and simulation outputs for UART0 (UART_PRIMARY = true) or UART1  #
--- # (UART_PRIMARY = false).                                                                       #
--- #                                                                                               #
--- # SIMULATION MODE:                                                                              #
--- # When the simulation mode is enabled (setting the ctrl.ctrl_sim_en_c bit) any write            #
--- # access to the TX register will not trigger any UART activity. Instead, the written data is    #
--- # output to the simulation environment. The lowest 8 bits of the written data are printed as    #
--- # ASCII char to the simulator console.                                                          #
--- # This char is also stored to the file "neorv32.uartX.sim_mode.text.out" (where X = 0 for UART0 #
--- # and X = 1 for UART1). The full 32-bit write data is also stored as 8-digit hexadecimal value  #
--- # to the file "neorv32.uartX.sim_mode.data.out" (where X = 0 for UART0 and X = 1 for UART1).    #
--- # No interrupts are triggered when in SIMULATION MODE.                                          #
--- # ********************************************************************************************* #
--- # BSD 3-Clause License                                                                          #
--- #                                                                                               #
--- # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
--- #                                                                                               #
--- # Redistribution and use in source and binary forms, with or without modification, are          #
--- # permitted provided that the following conditions are met:                                     #
--- #                                                                                               #
--- # 1. Redistributions of source code must retain the above copyright notice, this list of        #
--- #    conditions and the following disclaimer.                                                   #
--- #                                                                                               #
--- # 2. Redistributions in binary form must reproduce the above copyright notice, this list of     #
--- #    conditions and the following disclaimer in the documentation and/or other materials        #
--- #    provided with the distribution.                                                            #
--- #                                                                                               #
--- # 3. Neither the name of the copyright holder nor the names of its contributors may be used to  #
--- #    endorse or promote products derived from this software without specific prior written      #
--- #    permission.                                                                                #
--- #                                                                                               #
--- # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS   #
--- # OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF               #
--- # MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE    #
--- # COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,     #
--- # EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE #
--- # GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED    #
--- # AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING     #
--- # NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED  #
--- # OF THE POSSIBILITY OF SUCH DAMAGE.                                                            #
--- # ********************************************************************************************* #
--- # The NEORV32 Processor - https://github.com/stnolting/neorv32              (c) Stephan Nolting #
--- #################################################################################################
+-- ================================================================================ --
+-- NEORV32 SoC - Universal Asynchronous Receiver and Transmitter (UART)             --
+-- -------------------------------------------------------------------------------- --
+-- The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              --
+-- Copyright (c) NEORV32 contributors.                                              --
+-- Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  --
+-- Licensed under the BSD-3-Clause license, see LICENSE for details.                --
+-- SPDX-License-Identifier: BSD-3-Clause                                            --
+-- ================================================================================ --
 
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
+-- pragma translate_off
+-- RTL_SYNTHESIS OFF
+use std.textio.all;
+-- RTL_SYNTHESIS ON
+-- pragma translate_on
+
 library neorv32;
 use neorv32.neorv32_package.all;
-use std.textio.all;
 
 entity neorv32_uart is
   generic (
-    UART_PRIMARY : boolean; -- true = primary UART (UART0), false = secondary UART (UART1)
-    UART_RX_FIFO : natural; -- RX fifo depth, has to be a power of two, min 1
-    UART_TX_FIFO : natural  -- TX fifo depth, has to be a power of two, min 1
+    SIM_MODE_EN  : boolean; -- enable simulation-mode option
+    SIM_LOG_FILE : string;  -- name of SIM mode log file
+    UART_RX_FIFO : natural range 1 to 2**15; -- RX fifo depth, has to be a power of two, min 1
+    UART_TX_FIFO : natural range 1 to 2**15  -- TX fifo depth, has to be a power of two, min 1
   );
   port (
-    -- host access --
     clk_i       : in  std_ulogic; -- global clock line
-    rstn_i      : in  std_ulogic; -- global reset line, low-active
-    addr_i      : in  std_ulogic_vector(31 downto 0); -- address
-    rden_i      : in  std_ulogic; -- read enable
-    wren_i      : in  std_ulogic; -- write enable
-    data_i      : in  std_ulogic_vector(31 downto 0); -- data in
-    data_o      : out std_ulogic_vector(31 downto 0); -- data out
-    ack_o       : out std_ulogic; -- transfer acknowledge
-    -- clock generator --
+    rstn_i      : in  std_ulogic; -- global reset line, low-active, async
+    bus_req_i   : in  bus_req_t;  -- bus request
+    bus_rsp_o   : out bus_rsp_t;  -- bus response
     clkgen_en_o : out std_ulogic; -- enable clock generator
-    clkgen_i    : in  std_ulogic_vector(07 downto 0);
-    -- com lines --
-    uart_txd_o  : out std_ulogic;
-    uart_rxd_i  : in  std_ulogic;
-    -- hardware flow control --
+    clkgen_i    : in  std_ulogic_vector(7 downto 0);
+    uart_txd_o  : out std_ulogic; -- serial TX line
+    uart_rxd_i  : in  std_ulogic; -- serial RX line
     uart_rts_o  : out std_ulogic; -- UART.RX ready to receive ("RTR"), low-active, optional
     uart_cts_i  : in  std_ulogic; -- UART.TX allowed to transmit, low-active, optional
-    -- interrupts --
-    irq_rxd_o   : out std_ulogic; -- uart data received interrupt
-    irq_txd_o   : out std_ulogic  -- uart transmission done interrupt
+    irq_rx_o    : out std_ulogic; -- RX interrupt
+    irq_tx_o    : out std_ulogic  -- TX interrupt
   );
 end neorv32_uart;
 
 architecture neorv32_uart_rtl of neorv32_uart is
 
-  -- interface configuration for UART0 / UART1 --
-  constant uart_id_base_c      : std_ulogic_vector(31 downto 0) := cond_sel_stdulogicvector_f(UART_PRIMARY, uart0_base_c,      uart1_base_c);
-  constant uart_id_size_c      : natural                        := cond_sel_natural_f(        UART_PRIMARY, uart0_size_c,      uart1_size_c);
-  constant uart_id_ctrl_addr_c : std_ulogic_vector(31 downto 0) := cond_sel_stdulogicvector_f(UART_PRIMARY, uart0_ctrl_addr_c, uart1_ctrl_addr_c);
-  constant uart_id_rtx_addr_c  : std_ulogic_vector(31 downto 0) := cond_sel_stdulogicvector_f(UART_PRIMARY, uart0_rtx_addr_c,  uart1_rtx_addr_c);
-
-  -- IO space: module base address --
-  constant hi_abb_c : natural := index_size_f(io_size_c)-1; -- high address boundary bit
-  constant lo_abb_c : natural := index_size_f(uart_id_size_c); -- low address boundary bit
-
-  -- simulation output configuration --
-  constant sim_screen_output_en_c : boolean := true; -- output lowest byte as char to simulator console when enabled
-  constant sim_text_output_en_c   : boolean := true; -- output lowest byte as char to text file when enabled
-  constant sim_data_output_en_c   : boolean := true; -- dump 32-bit TX word to file when enabled
-  constant sim_uart_text_file_c   : string  := cond_sel_string_f(UART_PRIMARY, "neorv32.uart0.sim_mode.text.out", "neorv32.uart1.sim_mode.text.out");
-  constant sim_uart_data_file_c   : string  := cond_sel_string_f(UART_PRIMARY, "neorv32.uart0.sim_mode.data.out", "neorv32.uart1.sim_mode.data.out");
-
-  -- control register --
-  signal ctrl : std_ulogic_vector(31 downto 0);
+  -- simulation mode available? --
+  constant sim_mode_en_c : boolean := SIM_MODE_EN and is_simulation_c;
 
   -- control register bits --
-  constant ctrl_baud00_c   : natural :=  0; -- r/w: baud config bit 0
-  constant ctrl_baud01_c   : natural :=  1; -- r/w: baud config bit 1
-  constant ctrl_baud02_c   : natural :=  2; -- r/w: baud config bit 2
-  constant ctrl_baud03_c   : natural :=  3; -- r/w: baud config bit 3
-  constant ctrl_baud04_c   : natural :=  4; -- r/w: baud config bit 4
-  constant ctrl_baud05_c   : natural :=  5; -- r/w: baud config bit 5
-  constant ctrl_baud06_c   : natural :=  6; -- r/w: baud config bit 6
-  constant ctrl_baud07_c   : natural :=  7; -- r/w: baud config bit 7
-  constant ctrl_baud08_c   : natural :=  8; -- r/w: baud config bit 8
-  constant ctrl_baud09_c   : natural :=  9; -- r/w: baud config bit 9
-  constant ctrl_baud10_c   : natural := 10; -- r/w: baud config bit 10
-  constant ctrl_baud11_c   : natural := 11; -- r/w: baud config bit 11
-  constant ctrl_sim_en_c   : natural := 12; -- r/w: UART <<SIMULATION MODE>> enable
-  constant ctrl_rx_empty_c : natural := 13; -- r/-: RX FIFO is empty
-  constant ctrl_rx_half_c  : natural := 14; -- r/-: RX FIFO is at least half-full
-  constant ctrl_rx_full_c  : natural := 15; -- r/-: RX FIFO is full
-  constant ctrl_tx_empty_c : natural := 16; -- r/-: TX FIFO is empty
-  constant ctrl_tx_half_c  : natural := 17; -- r/-: TX FIFO is at least half-full
-  constant ctrl_tx_full_c  : natural := 18; -- r/-: TX FIFO is full
-  -- ...
-  constant ctrl_rts_en_c   : natural := 20; -- r/w: enable hardware flow control: assert rts_o if ready to receive
-  constant ctrl_cts_en_c   : natural := 21; -- r/w: enable hardware flow control: send only if cts_i is asserted
-  constant ctrl_pmode0_c   : natural := 22; -- r/w: Parity config (0=even; 1=odd)
-  constant ctrl_pmode1_c   : natural := 23; -- r/w: Enable parity bit
-  constant ctrl_prsc0_c    : natural := 24; -- r/w: baud prsc bit 0
-  constant ctrl_prsc1_c    : natural := 25; -- r/w: baud prsc bit 1
-  constant ctrl_prsc2_c    : natural := 26; -- r/w: baud prsc bit 2
-  constant ctrl_cts_c      : natural := 27; -- r/-: current state of CTS input
-  constant ctrl_en_c       : natural := 28; -- r/w: UART enable
-  constant ctrl_rx_irq_c   : natural := 29; -- r/w: RX IRQ mode: 1=FIFO at least half-full; 0=FIFO not empty
-  constant ctrl_tx_irq_c   : natural := 30; -- r/w: TX IRQ mode: 1=FIFO less than half-full; 0=FIFO not full
-  constant ctrl_tx_busy_c  : natural := 31; -- r/-: UART transmitter is busy
+  constant ctrl_en_c            : natural :=  0; -- r/w: UART enable
+  constant ctrl_sim_en_c        : natural :=  1; -- r/w: simulation-mode enable
+  constant ctrl_hwfc_en_c       : natural :=  2; -- r/w: enable RTS/CTS hardware flow-control
+  constant ctrl_prsc0_c         : natural :=  3; -- r/w: baud prescaler bit 0
+  constant ctrl_prsc2_c         : natural :=  5; -- r/w: baud prescaler bit 2
+  constant ctrl_baud0_c         : natural :=  6; -- r/w: baud divisor bit 0
+  constant ctrl_baud9_c         : natural := 15; -- r/w: baud divisor bit 9
+  --
+  constant ctrl_rx_nempty_c     : natural := 16; -- r/-: RX FIFO not empty
+  constant ctrl_rx_half_c       : natural := 17; -- r/-: RX FIFO at least half-full
+  constant ctrl_rx_full_c       : natural := 18; -- r/-: RX FIFO full
+  constant ctrl_tx_empty_c      : natural := 19; -- r/-: TX FIFO empty
+  constant ctrl_tx_nhalf_c      : natural := 20; -- r/-: TX FIFO not at least half-full
+  constant ctrl_tx_full_c       : natural := 21; -- r/-: TX FIFO full
+  constant ctrl_irq_rx_nempty_c : natural := 22; -- r/w: RX FIFO not empty
+  constant ctrl_irq_rx_half_c   : natural := 23; -- r/w: RX FIFO at least half-full
+  constant ctrl_irq_rx_full_c   : natural := 24; -- r/w: RX FIFO full
+  constant ctrl_irq_tx_empty_c  : natural := 25; -- r/w: TX FIFO empty
+  constant ctrl_irq_tx_nhalf_c  : natural := 26; -- r/w: TX FIFO not at least half-full
+  --
+  constant ctrl_rx_clr_c        : natural := 28; -- r/w: Clear RX FIFO, flag auto-clears
+  constant ctrl_tx_clr_c        : natural := 29; -- r/w: Clear TX FIFO, flag auto-clears
+  constant ctrl_rx_over_c       : natural := 30; -- r/-: RX FIFO overflow
+  constant ctrl_tx_busy_c       : natural := 31; -- r/-: UART transmitter is busy and TX FIFO not empty
 
-  -- data register flags --
-  constant data_lsb_c      : natural :=  0; -- r/-: received char LSB
-  constant data_msb_c      : natural :=  7; -- r/-: received char MSB
-  -- ...
-  constant data_rx_perr_c  : natural := 28; -- r/-: RX parity error
-  constant data_rx_ferr_c  : natural := 29; -- r/-: RX frame error
-  constant data_rx_overr_c : natural := 30; -- r/-: RX data overrun
-  constant data_rx_avail_c : natural := 31; -- r/-: RX data available
-
-  -- access control --
-  signal acc_en : std_ulogic; -- module access enable
-  signal addr   : std_ulogic_vector(31 downto 0); -- access address
-  signal wren   : std_ulogic; -- word write enable
-  signal rden   : std_ulogic; -- read enable
+  -- data register bits --
+  constant data_rtx_lsb_c        : natural :=  0; -- r/w: RX/TX data LSB
+  constant data_rtx_msb_c        : natural :=  7; -- r/w: RX/TX data MSB
+  constant data_rx_fifo_size_lsb : natural :=  8; -- r/-: log2(RX fifo size) LSB
+  constant data_rx_fifo_size_msb : natural := 11; -- r/-: log2(RX fifo size) MSB
+  constant data_tx_fifo_size_lsb : natural := 12; -- r/-: log2(TX fifo size) LSB
+  constant data_tx_fifo_size_msb : natural := 15; -- r/-: log2(TX fifo size) MSB
 
   -- clock generator --
   signal uart_clk : std_ulogic;
 
-  -- numbers of bits in transmission frame --
-  signal num_bits : std_ulogic_vector(3 downto 0);
-
-  -- hardware flow-control IO buffer --
-  signal uart_cts_ff : std_ulogic_vector(1 downto 0);
-  signal uart_rts    : std_ulogic;
+  -- control register --
+  type ctrl_t is record
+    enable        : std_ulogic;
+    sim_mode      : std_ulogic;
+    hwfc_en       : std_ulogic;
+    prsc          : std_ulogic_vector(2 downto 0);
+    baud          : std_ulogic_vector(9 downto 0);
+    irq_rx_nempty : std_ulogic;
+    irq_rx_half   : std_ulogic;
+    irq_rx_full   : std_ulogic;
+    irq_tx_empty  : std_ulogic;
+    irq_tx_nhalf  : std_ulogic;
+    clr_rx        : std_ulogic;
+    clr_tx        : std_ulogic;
+  end record;
+  signal ctrl : ctrl_t;
 
   -- UART transmitter --
-  type tx_state_t is (S_TX_IDLE, S_TX_GET, S_TX_CHECK, S_TX_TRANSMIT, S_TX_SIM);
   type tx_engine_t is record
-    state    : tx_state_t;
-    busy     : std_ulogic;
+    state    : std_ulogic_vector(2 downto 0);
+    sreg     : std_ulogic_vector(8 downto 0);
+    bitcnt   : std_ulogic_vector(3 downto 0);
+    baudcnt  : std_ulogic_vector(9 downto 0);
     done     : std_ulogic;
-    bitcnt   : std_ulogic_vector(03 downto 0);
-    sreg     : std_ulogic_vector(10 downto 0);
-    baud_cnt : std_ulogic_vector(11 downto 0);
-    cts      : std_ulogic; -- allow new transmission when 1
+    busy     : std_ulogic;
+    cts_sync : std_ulogic_vector(1 downto 0);
+    txd      : std_ulogic;
   end record;
   signal tx_engine : tx_engine_t;
 
   -- UART receiver --
-  type rx_state_t is (S_RX_IDLE, S_RX_RECEIVE);
   type rx_engine_t is record
-    state    : rx_state_t;
-    done     : std_ulogic;
-    sync     : std_ulogic_vector(04 downto 0);
-    bitcnt   : std_ulogic_vector(03 downto 0);
-    sreg     : std_ulogic_vector(09 downto 0);
-    baud_cnt : std_ulogic_vector(11 downto 0);
-    overr    : std_ulogic;
-    rtr      : std_ulogic; -- ready to receive when 1
+    state   : std_ulogic_vector(1 downto 0);
+    sreg    : std_ulogic_vector(8 downto 0);
+    bitcnt  : std_ulogic_vector(3 downto 0);
+    baudcnt : std_ulogic_vector(9 downto 0);
+    done    : std_ulogic;
+    sync    : std_ulogic_vector(2 downto 0);
+    over    : std_ulogic;
   end record;
   signal rx_engine : rx_engine_t;
 
-  -- TX FIFO --
-  type tx_buffer_t is record
+  -- FIFO interface --
+  type fifo_t is record
+    clear : std_ulogic; -- sync reset, high-active
     we    : std_ulogic; -- write enable
     re    : std_ulogic; -- read enable
-    clear : std_ulogic; -- sync reset, high-active
-    wdata : std_ulogic_vector(31 downto 0); -- write data
-    rdata : std_ulogic_vector(31 downto 0); -- read data
-    avail : std_ulogic; -- data available?
+    wdata : std_ulogic_vector(7 downto 0); -- write data
+    rdata : std_ulogic_vector(7 downto 0); -- read data
     free  : std_ulogic; -- free entry available?
-    half  : std_ulogic; -- half full
-  end record;
-  signal tx_buffer : tx_buffer_t;
-
-  -- RX FIFO --
-  type rx_buffer_t is record
-    we    : std_ulogic; -- write enable
-    re    : std_ulogic; -- read enable
-    clear : std_ulogic; -- sync reset, high-active
-    wdata : std_ulogic_vector(9 downto 0); -- write data
-    rdata : std_ulogic_vector(9 downto 0); -- read data
     avail : std_ulogic; -- data available?
-    free  : std_ulogic; -- free entry available?
-    half  : std_ulogic; -- half full
+    half  : std_ulogic; -- at least half full
   end record;
-  signal rx_buffer : rx_buffer_t;
-
-  -- interrupt generator --
-  type irq_t is record
-    set : std_ulogic;
-    buf : std_ulogic_vector(1 downto 0);
-  end record;
-  signal rx_irq, tx_irq : irq_t;
+  signal rx_fifo, tx_fifo : fifo_t;
 
 begin
 
-  -- Sanity Checks --------------------------------------------------------------------------
+  -- Bus Access -----------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  assert not (is_power_of_two_f(UART_RX_FIFO) = false) report "NEORV32 PROCESSOR CONFIG ERROR: UART" &
-  cond_sel_string_f(UART_PRIMARY, "0", "1") & " <UART_RX_FIFO> has to be a power of two." severity error;
-  assert not (is_power_of_two_f(UART_TX_FIFO) = false) report "NEORV32 PROCESSOR CONFIG ERROR: UART" &
-  cond_sel_string_f(UART_PRIMARY, "0", "1") & " <UART_TX_FIFO> has to be a power of two." severity error;
-
-
-  -- Access Control -------------------------------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  acc_en <= '1' when (addr_i(hi_abb_c downto lo_abb_c) = uart_id_base_c(hi_abb_c downto lo_abb_c)) else '0';
-  addr   <= uart_id_base_c(31 downto lo_abb_c) & addr_i(lo_abb_c-1 downto 2) & "00"; -- word aligned
-  wren   <= acc_en and wren_i;
-  rden   <= acc_en and rden_i;
-
-
-  -- Read/Write Access ----------------------------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  rw_access: process(rstn_i, clk_i)
+  bus_access: process(rstn_i, clk_i)
   begin
     if (rstn_i = '0') then
-      ctrl   <= (others => '0');
-      ack_o  <= '-';
-      data_o <= (others => '0');
+      bus_rsp_o          <= rsp_terminate_c;
+      ctrl.enable        <= '0';
+      ctrl.sim_mode      <= '0';
+      ctrl.hwfc_en       <= '0';
+      ctrl.prsc          <= (others => '0');
+      ctrl.baud          <= (others => '0');
+      ctrl.irq_rx_nempty <= '0';
+      ctrl.irq_rx_half   <= '0';
+      ctrl.irq_rx_full   <= '0';
+      ctrl.irq_tx_empty  <= '0';
+      ctrl.irq_tx_nhalf  <= '0';
+      ctrl.clr_rx        <= '0';
+      ctrl.clr_tx        <= '0';
     elsif rising_edge(clk_i) then
-      -- bus access acknowledge --
-      ack_o <= wren or rden;
-
-      -- write access --
-      if (wren = '1') then
-        if (addr = uart_id_ctrl_addr_c) then
-          ctrl <= (others => '0');
-          ctrl(ctrl_baud11_c downto ctrl_baud00_c) <= data_i(ctrl_baud11_c downto ctrl_baud00_c);
-          ctrl(ctrl_sim_en_c)                      <= data_i(ctrl_sim_en_c);
-          ctrl(ctrl_pmode1_c downto ctrl_pmode0_c) <= data_i(ctrl_pmode1_c downto ctrl_pmode0_c);
-          ctrl(ctrl_prsc2_c  downto ctrl_prsc0_c)  <= data_i(ctrl_prsc2_c  downto ctrl_prsc0_c);
-          ctrl(ctrl_rts_en_c)                      <= data_i(ctrl_rts_en_c);
-          ctrl(ctrl_cts_en_c)                      <= data_i(ctrl_cts_en_c);
-          ctrl(ctrl_rx_irq_c)                      <= data_i(ctrl_rx_irq_c);
-          ctrl(ctrl_tx_irq_c)                      <= data_i(ctrl_tx_irq_c);
-          ctrl(ctrl_en_c)                          <= data_i(ctrl_en_c);
+      -- defaults --
+      bus_rsp_o.ack  <= bus_req_i.stb;
+      bus_rsp_o.err  <= '0';
+      bus_rsp_o.data <= (others => '0');
+      ctrl.clr_rx    <= '0'; -- auto-clear
+      ctrl.clr_tx    <= '0'; -- auto-clear
+      -- bus access --
+      if (bus_req_i.stb = '1') then
+        if (bus_req_i.rw = '1') then -- write access
+          if (bus_req_i.addr(2) = '0') then -- control register
+            ctrl.enable        <= bus_req_i.data(ctrl_en_c);
+            ctrl.sim_mode      <= bus_req_i.data(ctrl_sim_en_c) and bool_to_ulogic_f(sim_mode_en_c);
+            ctrl.hwfc_en       <= bus_req_i.data(ctrl_hwfc_en_c);
+            ctrl.prsc          <= bus_req_i.data(ctrl_prsc2_c downto ctrl_prsc0_c);
+            ctrl.baud          <= bus_req_i.data(ctrl_baud9_c downto ctrl_baud0_c);
+            --
+            ctrl.irq_rx_nempty <= bus_req_i.data(ctrl_irq_rx_nempty_c);
+            ctrl.irq_rx_half   <= bus_req_i.data(ctrl_irq_rx_half_c);
+            ctrl.irq_rx_full   <= bus_req_i.data(ctrl_irq_rx_full_c);
+            ctrl.irq_tx_empty  <= bus_req_i.data(ctrl_irq_tx_empty_c);
+            ctrl.irq_tx_nhalf  <= bus_req_i.data(ctrl_irq_tx_nhalf_c);
+            ctrl.clr_rx        <= bus_req_i.data(ctrl_rx_clr_c);
+            ctrl.clr_tx        <= bus_req_i.data(ctrl_tx_clr_c);
+          end if;
+        else -- read access
+          if (bus_req_i.addr(2) = '0') then -- control register
+            bus_rsp_o.data(ctrl_en_c)                        <= ctrl.enable;
+            bus_rsp_o.data(ctrl_sim_en_c)                    <= ctrl.sim_mode and bool_to_ulogic_f(sim_mode_en_c);
+            bus_rsp_o.data(ctrl_hwfc_en_c)                   <= ctrl.hwfc_en;
+            bus_rsp_o.data(ctrl_prsc2_c downto ctrl_prsc0_c) <= ctrl.prsc;
+            bus_rsp_o.data(ctrl_baud9_c downto ctrl_baud0_c) <= ctrl.baud;
+            --
+            bus_rsp_o.data(ctrl_rx_nempty_c)                 <= rx_fifo.avail;
+            bus_rsp_o.data(ctrl_rx_half_c)                   <= rx_fifo.half;
+            bus_rsp_o.data(ctrl_rx_full_c)                   <= not rx_fifo.free;
+            bus_rsp_o.data(ctrl_tx_empty_c)                  <= not tx_fifo.avail;
+            bus_rsp_o.data(ctrl_tx_nhalf_c)                  <= not tx_fifo.half;
+            bus_rsp_o.data(ctrl_tx_full_c)                   <= not tx_fifo.free;
+            --
+            bus_rsp_o.data(ctrl_irq_rx_nempty_c)             <= ctrl.irq_rx_nempty;
+            bus_rsp_o.data(ctrl_irq_rx_half_c)               <= ctrl.irq_rx_half;
+            bus_rsp_o.data(ctrl_irq_rx_full_c)               <= ctrl.irq_rx_full;
+            bus_rsp_o.data(ctrl_irq_tx_empty_c)              <= ctrl.irq_tx_empty;
+            bus_rsp_o.data(ctrl_irq_tx_nhalf_c)              <= ctrl.irq_tx_nhalf;
+            --
+            bus_rsp_o.data(ctrl_rx_over_c)                   <= rx_engine.over;
+            bus_rsp_o.data(ctrl_tx_busy_c)                   <= tx_engine.busy or tx_fifo.avail;
+          else -- data register
+            bus_rsp_o.data(data_rtx_msb_c        downto data_rtx_lsb_c)        <= rx_fifo.rdata;
+            bus_rsp_o.data(data_rx_fifo_size_msb downto data_rx_fifo_size_lsb) <= std_ulogic_vector(to_unsigned(index_size_f(UART_RX_FIFO), 4));
+            bus_rsp_o.data(data_tx_fifo_size_msb downto data_tx_fifo_size_lsb) <= std_ulogic_vector(to_unsigned(index_size_f(UART_TX_FIFO), 4));
+          end if;
         end if;
-      end if;
 
-      -- read access --
-      data_o <= (others => '0');
-      if (rden = '1') then
-        if (addr = uart_id_ctrl_addr_c) then
-          data_o(ctrl_baud11_c downto ctrl_baud00_c) <= ctrl(ctrl_baud11_c downto ctrl_baud00_c);
-          data_o(ctrl_sim_en_c)                      <= ctrl(ctrl_sim_en_c);
-          data_o(ctrl_pmode1_c downto ctrl_pmode0_c) <= ctrl(ctrl_pmode1_c downto ctrl_pmode0_c);
-          data_o(ctrl_prsc2_c  downto ctrl_prsc0_c)  <= ctrl(ctrl_prsc2_c  downto ctrl_prsc0_c);
-          data_o(ctrl_rts_en_c)                      <= ctrl(ctrl_rts_en_c);
-          data_o(ctrl_cts_en_c)                      <= ctrl(ctrl_cts_en_c);
-          data_o(ctrl_rx_empty_c)                    <= not rx_buffer.avail;
-          data_o(ctrl_rx_half_c)                     <= rx_buffer.half;
-          data_o(ctrl_rx_full_c)                     <= not rx_buffer.free;
-          data_o(ctrl_tx_empty_c)                    <= not tx_buffer.avail;
-          data_o(ctrl_tx_half_c)                     <= tx_buffer.half;
-          data_o(ctrl_tx_full_c)                     <= not tx_buffer.free;
-          data_o(ctrl_en_c)                          <= ctrl(ctrl_en_c);
-          data_o(ctrl_rx_irq_c)                      <= ctrl(ctrl_rx_irq_c) and bool_to_ulogic_f(boolean(UART_RX_FIFO > 1)); -- tie to zero if UART_RX_FIFO = 1
-          data_o(ctrl_tx_irq_c)                      <= ctrl(ctrl_tx_irq_c) and bool_to_ulogic_f(boolean(UART_TX_FIFO > 1)); -- tie to zero if UART_TX_FIFO = 1
-          data_o(ctrl_tx_busy_c)                     <= tx_engine.busy;
-          data_o(ctrl_cts_c)                         <= uart_cts_ff(1);
-        else -- uart_id_rtx_addr_c
-          data_o(data_msb_c downto data_lsb_c) <= rx_buffer.rdata(7 downto 0);
-          data_o(data_rx_perr_c)               <= rx_buffer.rdata(8);
-          data_o(data_rx_ferr_c)               <= rx_buffer.rdata(9);
-          data_o(data_rx_overr_c)              <= rx_engine.overr;
-          data_o(data_rx_avail_c)              <= rx_buffer.avail; -- data available (valid?)
-        end if;
       end if;
     end if;
-  end process rw_access;
+  end process bus_access;
 
-  -- number of bits to be sampled --
-  -- if parity flag is ENABLED:  11 bit -> "1011" (1 start bit + 8 data bits + 1 parity bit + 1 stop bit)
-  -- if parity flag is DISABLED: 10 bit -> "1010" (1 start bit + 8 data bits + 1 stop bit)
-  num_bits <= "1011" when (ctrl(ctrl_pmode1_c) = '1') else "1010";
-
-
-  -- Clock Selection ------------------------------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  -- clock enable --
-  clkgen_en_o <= ctrl(ctrl_en_c);
-
-  -- uart clock select --
-  uart_clk <= clkgen_i(to_integer(unsigned(ctrl(ctrl_prsc2_c downto ctrl_prsc0_c))));
+  -- UART clock enable --
+  clkgen_en_o <= ctrl.enable;
+  uart_clk    <= clkgen_i(to_integer(unsigned(ctrl.prsc)));
 
 
   -- TX FIFO --------------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  tx_engine_fifo_inst: neorv32_fifo
+  tx_engine_fifo_inst: entity neorv32.neorv32_fifo
   generic map (
-    FIFO_DEPTH => UART_TX_FIFO, -- number of fifo entries; has to be a power of two; min 1
-    FIFO_WIDTH => 32,           -- size of data elements in fifo (32-bit only for simulation)
-    FIFO_RSYNC => false,        -- async read
-    FIFO_SAFE  => true,         -- safe access
-    FIFO_GATE  => false         -- no output gate required
+    FIFO_DEPTH => UART_TX_FIFO,
+    FIFO_WIDTH => 8,
+    FIFO_RSYNC => true,
+    FIFO_SAFE  => true,
+    FULL_RESET => false
   )
   port map (
     -- control --
-    clk_i   => clk_i,           -- clock, rising edge
-    rstn_i  => '1',             -- async reset, low-active
-    clear_i => tx_buffer.clear, -- sync reset, high-active
-    half_o  => tx_buffer.half,  -- FIFO at least half-full
-    -- write port --
-    wdata_i => tx_buffer.wdata, -- write data
-    we_i    => tx_buffer.we,    -- write enable
-    free_o  => tx_buffer.free,  -- at least one entry is free when set
-    -- read port --
-    re_i    => tx_buffer.re,    -- read enable
-    rdata_o => tx_buffer.rdata, -- read data
-    avail_o => tx_buffer.avail  -- data available when set
+    clk_i   => clk_i,
+    rstn_i  => rstn_i,
+    clear_i => tx_fifo.clear,
+    half_o  => tx_fifo.half,
+    wdata_i => tx_fifo.wdata,
+    we_i    => tx_fifo.we,
+    free_o  => tx_fifo.free,
+    re_i    => tx_fifo.re,
+    rdata_o => tx_fifo.rdata,
+    avail_o => tx_fifo.avail
   );
 
-  -- control --
-  tx_buffer.clear <= not ctrl(ctrl_en_c);
+  tx_fifo.clear <= '1' when (ctrl.enable = '0') or (ctrl.sim_mode = '1') or (ctrl.clr_tx = '1') else '0';
+  tx_fifo.wdata <= bus_req_i.data(data_rtx_msb_c downto data_rtx_lsb_c);
+  tx_fifo.we    <= '1' when (bus_req_i.stb = '1') and (bus_req_i.rw = '1') and (bus_req_i.addr(2) = '1') else '0';
+  tx_fifo.re    <= '1' when (tx_engine.state = "100") else '0';
 
-  -- write access --
-  tx_buffer.we    <= '1' when (wren = '1') and (addr = uart_id_rtx_addr_c) else '0';
-  tx_buffer.wdata <= data_i;
-
-
-  -- UART Transmitter Engine ----------------------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  uart_tx_engine: process(clk_i)
+  -- TX interrupt generator --
+  tx_irq_generator: process(rstn_i, clk_i)
   begin
-    if rising_edge(clk_i) then
-      -- defaults --
-      uart_txd_o     <= '1'; -- keep TX line idle (=high) if waiting for permission to start sending (->CTS)
-      tx_buffer.re   <= '0';
-      tx_engine.done <= '0';
-
-      -- FSM --
-      if (ctrl(ctrl_en_c) = '0') then -- disabled
-        tx_engine.state <= S_TX_IDLE;
-      else
-        case tx_engine.state is
-
-          when S_TX_IDLE => -- wait for new data to send
-          -- ------------------------------------------------------------
-            if (tx_buffer.avail = '1') then -- new data available
-              if (ctrl(ctrl_sim_en_c) = '0') then -- normal mode
-                tx_engine.state <= S_TX_GET;
-              else -- simulation mode
-                tx_engine.state <= S_TX_SIM;
-              end if;
-              tx_buffer.re <= '1';
-            end if;
-
-          when S_TX_GET => -- get new data from buffer and prepare transmission
-          -- ------------------------------------------------------------
-            tx_engine.baud_cnt <= ctrl(ctrl_baud11_c downto ctrl_baud00_c);
-            tx_engine.bitcnt   <= num_bits;
-            if (ctrl(ctrl_pmode1_c) = '1') then -- add parity flag
-              -- stop bit & parity bit & data (8-bit) & start bit
-              tx_engine.sreg <= '1' & (xor_reduce_f(tx_buffer.rdata(7 downto 0)) xor ctrl(ctrl_pmode0_c)) & tx_buffer.rdata(7 downto 0) & '0';
-            else
-              -- (dummy fill-bit &) stop bit & data (8-bit) & start bit
-              tx_engine.sreg <= '1' & '1' & tx_buffer.rdata(7 downto 0) & '0';
-            end if;
-            tx_engine.state <= S_TX_CHECK;
-
-          when S_TX_CHECK => -- check if allowed to send
-          -- ------------------------------------------------------------
-            if (tx_engine.cts = '1') then -- clear to send
-              tx_engine.state <= S_TX_TRANSMIT;
-            end if;
-
-          when S_TX_TRANSMIT => -- transmit data
-          -- ------------------------------------------------------------
-            if (uart_clk = '1') then
-              if (or_reduce_f(tx_engine.baud_cnt) = '0') then -- bit done?
-                tx_engine.baud_cnt <= ctrl(ctrl_baud11_c downto ctrl_baud00_c);
-                tx_engine.bitcnt   <= std_ulogic_vector(unsigned(tx_engine.bitcnt) - 1);
-                tx_engine.sreg     <= '1' & tx_engine.sreg(tx_engine.sreg'left downto 1);
-              else
-                tx_engine.baud_cnt <= std_ulogic_vector(unsigned(tx_engine.baud_cnt) - 1);
-              end if;
-            end if;
-            uart_txd_o <= tx_engine.sreg(0);
-            if (or_reduce_f(tx_engine.bitcnt) = '0') then -- all bits send?
-              tx_engine.done  <= '1'; -- sending done
-              tx_engine.state <= S_TX_IDLE;
-            end if;
-
-          when S_TX_SIM => -- simulation mode output
-          -- ------------------------------------------------------------
-            tx_engine.state <= S_TX_IDLE;
-
-          when others => -- undefined
-          -- ------------------------------------------------------------
-            tx_engine.state <= S_TX_IDLE;
-
-        end case;
-      end if;
+    if (rstn_i = '0') then
+      irq_tx_o <= '0';
+    elsif rising_edge(clk_i) then
+      irq_tx_o <= ctrl.enable and (
+                  (ctrl.irq_tx_empty and (not tx_fifo.avail)) or -- fire IRQ if TX FIFO empty
+                  (ctrl.irq_tx_nhalf and (not tx_fifo.half)));   -- fire IRQ if TX FIFO not at least half full
     end if;
-  end process uart_tx_engine;
-
-  -- transmitter busy --
-  tx_engine.busy <= '0' when (tx_engine.state = S_TX_IDLE) else '1';
-
-
-  -- UART Receiver Engine -------------------------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
-  uart_rx_engine: process(clk_i)
-  begin
-    if rising_edge(clk_i) then
-      -- input synchronizer --
-      rx_engine.sync <= uart_rxd_i & rx_engine.sync(rx_engine.sync'left downto 1);
-
-      -- default --
-      rx_engine.done <= '0';
-
-      -- FSM --
-      if (ctrl(ctrl_en_c) = '0') then -- disabled
-        rx_engine.overr <= '0';
-        rx_engine.state <= S_RX_IDLE;
-      else
-        case rx_engine.state is
-
-          when S_RX_IDLE => -- idle; prepare receive
-          -- ------------------------------------------------------------
-            rx_engine.baud_cnt <= '0' & ctrl(ctrl_baud11_c downto ctrl_baud01_c); -- half baud delay at the beginning to sample in the middle of each bit
-            rx_engine.bitcnt   <= num_bits;
-            if (rx_engine.sync(3 downto 0) = "0011") then -- start bit? (falling edge)
-              rx_engine.state <= S_RX_RECEIVE;
-            end if;
-
-          when S_RX_RECEIVE => -- receive data
-          -- ------------------------------------------------------------
-            if (uart_clk = '1') then
-              if (or_reduce_f(rx_engine.baud_cnt) = '0') then -- bit done
-                rx_engine.baud_cnt <= ctrl(ctrl_baud11_c downto ctrl_baud00_c);
-                rx_engine.bitcnt   <= std_ulogic_vector(unsigned(rx_engine.bitcnt) - 1);
-                rx_engine.sreg     <= rx_engine.sync(2) & rx_engine.sreg(rx_engine.sreg'left downto 1);
-              else
-                rx_engine.baud_cnt <= std_ulogic_vector(unsigned(rx_engine.baud_cnt) - 1);
-              end if;
-            end if;
-            if (or_reduce_f(rx_engine.bitcnt) = '0') then -- all bits received?
-              rx_engine.done  <= '1'; -- receiving done
-              rx_engine.state <= S_RX_IDLE;
-            end if;
-
-          when others => -- undefined
-          -- ------------------------------------------------------------
-            rx_engine.state <= S_RX_IDLE;
-
-        end case;
-
-        -- overrun flag --
-        if (rden = '1') and (addr = uart_id_rtx_addr_c) then -- clear when reading data register
-          rx_engine.overr <= '0';
-        elsif (rx_buffer.we = '1') and (rx_buffer.free = '0') then -- write to full FIFO
-          rx_engine.overr <= '1';
-        end if;
-      end if;
-    end if;
-  end process uart_rx_engine;
-
-  -- Enough space (incl. safety margin) in RX buffer for a new char (FIFO less than half-full)? --
-  rx_engine.rtr <= '1' when (rx_buffer.half = '0') and (ctrl(ctrl_en_c) = '1') else '0';
+  end process tx_irq_generator;
 
 
   -- RX FIFO --------------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  rx_engine_fifo_inst: neorv32_fifo
+  rx_engine_fifo_inst: entity neorv32.neorv32_fifo
   generic map (
-    FIFO_DEPTH => UART_RX_FIFO, -- number of fifo entries; has to be a power of two; min 1
-    FIFO_WIDTH => 10,           -- size of data elements in fifo
-    FIFO_RSYNC => false,        -- async read
-    FIFO_SAFE  => true,         -- safe access
-    FIFO_GATE  => true          -- set read data to zero if no valid data available
+    FIFO_DEPTH => UART_RX_FIFO,
+    FIFO_WIDTH => 8,
+    FIFO_RSYNC => true,
+    FIFO_SAFE  => true,
+    FULL_RESET => false
   )
   port map (
-    -- control --
-    clk_i   => clk_i,           -- clock, rising edge
-    rstn_i  => '1',             -- async reset, low-active
-    clear_i => rx_buffer.clear, -- sync reset, high-active
-    half_o  => rx_buffer.half,  -- FIFO at least half-full
-    -- write port --
-    wdata_i => rx_buffer.wdata, -- write data
-    we_i    => rx_buffer.we,    -- write enable
-    free_o  => rx_buffer.free,  -- at least one entry is free when set
-    -- read port --
-    re_i    => rx_buffer.re,    -- read enable
-    rdata_o => rx_buffer.rdata, -- read data
-    avail_o => rx_buffer.avail  -- data available when set
+    clk_i   => clk_i,
+    rstn_i  => rstn_i,
+    clear_i => rx_fifo.clear,
+    half_o  => rx_fifo.half,
+    wdata_i => rx_fifo.wdata,
+    we_i    => rx_fifo.we,
+    free_o  => rx_fifo.free,
+    re_i    => rx_fifo.re,
+    rdata_o => rx_fifo.rdata,
+    avail_o => rx_fifo.avail
   );
 
-  -- control --
-  rx_buffer.clear <= not ctrl(ctrl_en_c);
+  rx_fifo.clear <= '1' when (ctrl.enable = '0') or (ctrl.sim_mode = '1') or (ctrl.clr_rx = '1') else '0';
+  rx_fifo.wdata <= rx_engine.sreg(7 downto 0);
+  rx_fifo.we    <= rx_engine.done;
+  rx_fifo.re    <= '1' when (bus_req_i.stb = '1') and (bus_req_i.rw = '0') and (bus_req_i.addr(2) = '1') else '0';
 
-  -- read/write access --
-  rx_buffer.wdata(7 downto 0) <= rx_engine.sreg(7 downto 0) when (ctrl(ctrl_pmode1_c) = '1') else rx_engine.sreg(8 downto 1); -- RX data
-  rx_buffer.wdata(8) <= ctrl(ctrl_pmode1_c) and (xor_reduce_f(rx_engine.sreg(8 downto 0)) xor ctrl(ctrl_pmode0_c)); -- parity error flag
-  rx_buffer.wdata(9) <= not rx_engine.sreg(9); -- frame error flag: check stop bit (error if not set)
-  rx_buffer.we <= '1' when (rx_engine.bitcnt = "0000") and (rx_engine.state = S_RX_RECEIVE) else '0'; -- RX complete
-  rx_buffer.re <= '1' when (rden = '1') and (addr = uart_id_rtx_addr_c) else '0';
+  -- RX interrupt generator --
+  rx_irq_generator: process(rstn_i, clk_i)
+  begin
+    if (rstn_i = '0') then
+      irq_rx_o <= '0';
+    elsif rising_edge(clk_i) then
+      irq_rx_o <= ctrl.enable and (
+                  (ctrl.irq_rx_nempty and rx_fifo.avail) or     -- fire IRQ if RX FIFO not empty
+                  (ctrl.irq_rx_half   and rx_fifo.half)  or     -- fire IRQ if RX FIFO at least half full
+                  (ctrl.irq_rx_full   and (not rx_fifo.free))); -- fire IRQ if RX FIFO full
+    end if;
+  end process rx_irq_generator;
 
 
-  -- Hardware Flow Control ------------------------------------------------------------------
+  -- Transmit Engine ------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  tx_engine.cts <= (not uart_cts_ff(1)) when (ctrl(ctrl_cts_en_c) = '1') else '1'; -- input is low-active, internal signal is high-active
-  uart_rts      <= (not rx_engine.rtr)  when (ctrl(ctrl_rts_en_c) = '1') else '0'; -- output is low-active
-
-  -- flow-control input/output synchronizer --
-  flow_control_buffer: process(clk_i)
+  transmitter: process(rstn_i, clk_i)
   begin
-    if rising_edge(clk_i) then -- should be mapped to IOBs
-      uart_cts_ff <= uart_cts_ff(0) & uart_cts_i;
-      uart_rts_o  <= uart_rts;
+    if (rstn_i = '0') then
+      tx_engine.cts_sync <= (others => '0');
+      tx_engine.done     <= '0';
+      tx_engine.state    <= (others => '0');
+      tx_engine.baudcnt  <= (others => '0');
+      tx_engine.bitcnt   <= (others => '0');
+      tx_engine.sreg     <= (others => '0');
+      tx_engine.txd      <= '1';
+    elsif rising_edge(clk_i) then
+      -- synchronize clear-to-send --
+      tx_engine.cts_sync <= tx_engine.cts_sync(0) & uart_cts_i;
+
+      -- defaults --
+      tx_engine.done <= '0';
+      tx_engine.txd  <= '1';
+
+      -- FSM --
+      tx_engine.state(2) <= ctrl.enable;
+      case tx_engine.state is
+
+        when "100" => -- IDLE: wait for new data to send
+        -- ------------------------------------------------------------
+          tx_engine.baudcnt <= ctrl.baud;
+          tx_engine.bitcnt  <= "1011"; -- 1 start-bit + 8 data-bits + 1 stop-bit + 1 pause-bit
+          tx_engine.sreg    <= tx_fifo.rdata & '0'; -- data & start-bit
+          if (tx_fifo.avail = '1') then
+            tx_engine.state(1 downto 0) <= "01";
+          end if;
+
+        when "101" => -- WAIT: check if we can start sending
+        -- ------------------------------------------------------------
+          if (uart_clk = '1') and -- start with next clock tick
+             ((tx_engine.cts_sync(1) = '0') or (ctrl.hwfc_en = '0')) then -- allowed to send OR flow-control disabled
+            tx_engine.state(1 downto 0) <= "11";
+          end if;
+
+        when "111" => -- SEND: transmit data
+        -- ------------------------------------------------------------
+          tx_engine.txd <= tx_engine.sreg(0);
+          if (uart_clk = '1') then
+            if (tx_engine.baudcnt = "0000000000") then -- bit done?
+              tx_engine.baudcnt <= ctrl.baud;
+              tx_engine.bitcnt  <= std_ulogic_vector(unsigned(tx_engine.bitcnt) - 1);
+              tx_engine.sreg    <= '1' & tx_engine.sreg(tx_engine.sreg'left downto 1);
+            else
+              tx_engine.baudcnt <= std_ulogic_vector(unsigned(tx_engine.baudcnt) - 1);
+            end if;
+          end if;
+          if (tx_engine.bitcnt = "0000") then -- all bits send?
+            tx_engine.done              <= '1';
+            tx_engine.state(1 downto 0) <= "00";
+          end if;
+
+        when others => -- "0--": disabled
+        -- ------------------------------------------------------------
+          tx_engine.state(1 downto 0) <= "00";
+
+      end case;
     end if;
-  end process flow_control_buffer;
+  end process transmitter;
+
+  -- transmitter busy --
+  tx_engine.busy <= '0' when (tx_engine.state(1 downto 0) = "00") else '1';
+
+  -- serial data output --
+  uart_txd_o <= tx_engine.txd;
 
 
-  -- Interrupt Generator --------------------------------------------------------------------
+  -- Receive Engine -------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  irq_type: process(ctrl, tx_buffer, rx_buffer, tx_engine.done)
+  receiver: process(rstn_i, clk_i)
   begin
-    -- TX interrupt --
-    if (UART_TX_FIFO = 1) or (ctrl(ctrl_tx_irq_c) = '0') then
-      tx_irq.set <= tx_buffer.free and tx_engine.done; -- fire IRQ if FIFO is not full
-    else
-      tx_irq.set <= (not tx_buffer.half) and tx_engine.done; -- fire IRQ if FIFO is less than half-full
-    end if;
-    -- RX interrupt --
-    if (UART_RX_FIFO = 1) or (ctrl(ctrl_rx_irq_c) = '0') then
-      rx_irq.set <= rx_buffer.avail; -- fire IRQ if FIFO is not empty
-    else
-      rx_irq.set <= rx_buffer.half; -- fire IRQ if FIFO is at least half-full
-    end if;
-  end process irq_type;
+    if (rstn_i = '0') then
+      rx_engine.sync    <= (others => '0');
+      rx_engine.done    <= '0';
+      rx_engine.state   <= (others => '0');
+      rx_engine.baudcnt <= (others => '0');
+      rx_engine.bitcnt  <= (others => '0');
+      rx_engine.sreg    <= (others => '0');
+    elsif rising_edge(clk_i) then
+      -- input synchronizer --
+      rx_engine.sync(2) <= uart_rxd_i;
+      if (uart_clk = '1') then
+        rx_engine.sync(1 downto 0) <= rx_engine.sync(2 downto 1);
+      end if;
 
-  -- interrupt edge detector --
-  irq_detect: process(clk_i)
+      -- defaults --
+      rx_engine.done <= '0';
+
+      -- FSM --
+      rx_engine.state(1) <= ctrl.enable;
+      case rx_engine.state is
+
+        when "10" => -- IDLE: wait for incoming transmission
+        -- ------------------------------------------------------------
+          rx_engine.baudcnt <= '0' & ctrl.baud(9 downto 1); -- half baud delay at the beginning to sample in the middle of each bit
+          rx_engine.bitcnt  <= "1010"; -- 1 start-bit + 8 data-bits + 1 stop-bit
+          if (rx_engine.sync(1 downto 0) = "01") then -- start bit detected (falling edge)?
+            rx_engine.state(0) <= '1';
+          end if;
+
+        when "11" => -- RECEIVE: sample receive data
+        -- ------------------------------------------------------------
+          if (uart_clk = '1') then
+            if (rx_engine.baudcnt = "0000000000") then -- bit done
+              rx_engine.baudcnt <= ctrl.baud;
+              rx_engine.bitcnt  <= std_ulogic_vector(unsigned(rx_engine.bitcnt) - 1);
+              rx_engine.sreg    <= rx_engine.sync(2) & rx_engine.sreg(rx_engine.sreg'left downto 1);
+            else
+              rx_engine.baudcnt <= std_ulogic_vector(unsigned(rx_engine.baudcnt) - 1);
+            end if;
+          end if;
+          if (rx_engine.bitcnt = "0000") then -- all bits received?
+            rx_engine.done     <= '1'; -- receiving done
+            rx_engine.state(0) <= '0';
+          end if;
+
+        when others => -- "0-": disabled
+        -- ------------------------------------------------------------
+          rx_engine.state(0) <= '0';
+
+      end case;
+    end if;
+  end process receiver;
+
+  -- RX overrun flag --
+  fifo_overrun: process(rstn_i, clk_i)
   begin
-    if rising_edge(clk_i) then
-      if (ctrl(ctrl_en_c) = '0') then
-        tx_irq.buf <= "00";
-        rx_irq.buf <= "00";
-      else
-        tx_irq.buf <= tx_irq.buf(0) & tx_irq.set;
-        rx_irq.buf <= rx_irq.buf(0) & rx_irq.set;
+    if (rstn_i = '0') then
+      rx_engine.over <= '0';
+    elsif rising_edge(clk_i) then
+      if (ctrl.enable = '0') then -- clear when disabled
+        rx_engine.over <= '0';
+      elsif (rx_fifo.we = '1') and (rx_fifo.free = '0') then -- writing to full FIFO
+        rx_engine.over <= '1';
       end if;
     end if;
-  end process irq_detect;
+  end process fifo_overrun;
 
-  -- IRQ requests to CPU --
-  irq_txd_o <= '1' when (tx_irq.buf = "01") else '0';
-  irq_rxd_o <= '1' when (rx_irq.buf = "01") else '0';
+  -- HW flow-control: ready to receive? --
+  rtr_control: process(rstn_i, clk_i)
+  begin
+    if (rstn_i = '0') then
+      uart_rts_o <= '0';
+    elsif rising_edge(clk_i) then
+      if (ctrl.hwfc_en = '1') then
+        if (ctrl.enable = '0') or -- UART disabled
+           (rx_fifo.half = '1') then -- RX FIFO at least half-full: no "safe space" left in RX FIFO
+          uart_rts_o <= '1'; -- NOT allowed to send
+        else
+          uart_rts_o <= '0'; -- ready to receive
+        end if;
+      else
+        uart_rts_o <= '0'; -- always ready to receive when HW flow-control is disabled
+      end if;
+    end if;
+  end process rtr_control;
 
 
   -- SIMULATION Transmitter -----------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
+-- pragma translate_off
+-- RTL_SYNTHESIS OFF
   simulation_transmitter:
-  if (is_simulation_c = true) generate -- for SIMULATION ONLY!
-    sim_output: process(clk_i)
-      file file_uart_text_out : text open write_mode is sim_uart_text_file_c;
-      file file_uart_data_out : text open write_mode is sim_uart_data_file_c;
-      variable char_v         : integer;
-      variable line_screen_v  : line; -- we need several line variables here since "writeline" seems to flush the source variable
-      variable line_text_v    : line;
-      variable line_data_v    : line;
+  if sim_mode_en_c generate -- for simulation only!
+    sim_tx: process(clk_i)
+      file file_out          : text open write_mode is SIM_LOG_FILE;
+      variable char_v        : integer;
+      variable line_screen_v : line;
+      variable line_file_v   : line;
     begin
-      if rising_edge(clk_i) then
-        if (tx_engine.state = S_TX_SIM) then -- UART simulation mode
-          
-          -- print lowest byte as ASCII char --
-          char_v := to_integer(unsigned(tx_buffer.rdata(7 downto 0)));
-          if (char_v >= 128) then -- out of range?
+      if rising_edge(clk_i) then -- no reset required
+        if (ctrl.enable = '1') and (ctrl.sim_mode = '1') and (bus_req_i.stb = '1') and (bus_req_i.rw = '1') and (bus_req_i.addr(2) = '1') then
+          -- convert lowest byte to ASCII char --
+          char_v := to_integer(unsigned(bus_req_i.data(7 downto 0)));
+          if (char_v >= 128) then -- out of printable range?
             char_v := 0;
           end if;
-
           -- ASCII output --
           if (char_v /= 10) and (char_v /= 13) then -- skip line breaks - they are issued via "writeline"
-            if (sim_screen_output_en_c = true) then
-              write(line_screen_v, character'val(char_v));
-            end if;
-            if (sim_text_output_en_c = true) then
-              write(line_text_v, character'val(char_v));
-            end if;
+            write(line_screen_v, character'val(char_v)); -- console
+            write(line_file_v, character'val(char_v)); -- log file
           elsif (char_v = 10) then -- line break: write to screen and text file
-            if (sim_screen_output_en_c = true) then
-              writeline(output, line_screen_v);
-            end if;
-            if (sim_text_output_en_c = true) then
-              writeline(file_uart_text_out, line_text_v);
-            end if;
+            writeline(output, line_screen_v); -- console
+            writeline(file_out, line_file_v); -- log file
           end if;
-
-          -- dump raw data as 8 hex chars to file --
-          if (sim_data_output_en_c = true) then
-            for x in 7 downto 0 loop
-              write(line_data_v, to_hexchar_f(tx_buffer.rdata(3+x*4 downto 0+x*4))); -- write in hex form
-            end loop; -- x
-            writeline(file_uart_data_out, line_data_v);
-          end if;
-
         end if;
       end if;
-    end process sim_output;
+    end process sim_tx;
   end generate;
+-- RTL_SYNTHESIS ON
+-- pragma translate_on
 
 
 end neorv32_uart_rtl;
