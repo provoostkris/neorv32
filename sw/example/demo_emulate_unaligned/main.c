@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -9,9 +9,8 @@
 
 /**********************************************************************//**
  * @file demo_emulate_unaligned/main.c
- * @author Stephan Nolting
- * @brief Demo program for emulating unaligned memory accesses using the NEORV32
- * run-time environment (RTE).
+ * @brief Demo program for emulating unaligned memory accesses using the
+ * context-access functions of the NEORV32 run-time environment.
  **************************************************************************/
 
 #include <neorv32.h>
@@ -78,8 +77,8 @@ void trap_handler_emulate_unaligned_lw(void) {
 
   }
   else {
-    // use the RTE debug handler for any other misaligned load exception
-    neorv32_rte_debug_handler();
+    neorv32_uart0_printf("Unexpected instruction (0x%x @ 0x%x)!\n",
+      neorv32_cpu_csr_read(CSR_MTINST), neorv32_cpu_csr_read(CSR_MEPC));
   }
 }
 
@@ -135,7 +134,7 @@ int main() {
   neorv32_uart0_printf("\nUnaligned load with emulation:\n");
 
   // install trap handler for "unaligned load address" exception
-  neorv32_rte_handler_install(RTE_TRAP_L_MISALIGNED, trap_handler_emulate_unaligned_lw);
+  neorv32_rte_handler_install(TRAP_CODE_L_MISALIGNED, trap_handler_emulate_unaligned_lw);
 
   addr = ((uint32_t)&data_block[0]) + 1; // = unaligned address
   neorv32_uart0_printf("MEM[0x%x] = ", addr);

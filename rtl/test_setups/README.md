@@ -1,15 +1,12 @@
-# Test Setups
+## Test Setups
 
 This folder contains very simple test setups that are intended for project beginners
 to setup a minimal NEORV32 SoC. These setups are used in the :books:
 [NEORV32 User Guide](https://stnolting.github.io/neorv32/ug/).
-Note that these setups provides a minimalistic configuration to keep
+Note that these setups provides a minimalist configuration to keep
 things at a simple level at first. Additional CPU ISA extensions, performance options and
 optional peripheral modules can be enabled by specifying the according :book:
 [configuration generics](https://stnolting.github.io/neorv32/#_processor_top_entity_generics).
-
-
-### Setup Top Entities
 
 #### Clocking and Reset
 
@@ -22,8 +19,8 @@ Each setup provides three elementary generics that can/should be adapted to fit
 your FPGA/board.
 
 * The clock speed in Hz **has to be specified** via the `CLOCK_SPEED` generic to fit your clock source.
-* The processor-internal instruction memory (IMEM) size _can be modified_ via the `MEM_INT_IMEM_SIZE` generic.
-* The processor-internal data memory (DMEM) size _can be modified_ via the `MEM_INT_DMEM_SIZE` generic.
+* The processor-internal instruction memory (IMEM) size _can be modified_ via the `IMEM_SIZE` generic.
+* The processor-internal data memory (DMEM) size _can be modified_ via the `DMEM_SIZE` generic.
 
 > [!WARNING]
 > Modifying the memory sizes might require adaption of the NEORV32 linker script.

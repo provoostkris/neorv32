@@ -3,24 +3,33 @@
 ==== Instruction Memory (IMEM)
 
 [cols="<3,<3,<4"]
-[frame="topbot",grid="none"]
+[grid="none"]
 |=======================
-| Hardware source files:  | neorv32_imem.vhd              | default platform-agnostic instruction memory (RAM or ROM)
-|                         | neorv32_application_image.vhd | initialization image (a VHDL package)
-| Software driver files:  | none                          | _implicitly used_
+| Hardware source files:  | neorv32_imem.vhd              | generic processor-internal instruction memory (RAM or ROM)
+|                         | neorv32_application_image.vhd | memory image (VHDL package)
+| Software driver files:  | none                          |
 | Top entity ports:       | none                          |
-| Configuration generics: | `MEM_INT_IMEM_EN`             | implement processor-internal IMEM when `true`
-|                         | `MEM_INT_IMEM_SIZE`           | IMEM size in bytes (use a power of 2)
+| Configuration generics: | `IMEM_EN`                     | implement processor-internal IMEM when `true`
+|                         | `IMEM_SIZE`                   | IMEM size in bytes (use a power of 2)
+|                         | `IMEM_OUTREG_EN`              | add IMEM output register stage
 |                         | `BOOT_MODE_SELECT`            | implement IMEM as ROM when `BOOT_MODE_SELECT` = 2; see <<_boot_configuration>>
 | CPU interrupts:         | none                          |
-| Access restrictions:  2+| none / read-only if `INT_BOOTLOADER_EN = true`
 |=======================
+
+**Key Features**
+
+* Burst-capable tightly-coupled on-chip instruction memory
+* Configurable RAM size
+* Accessible at the byte level
+* Can be mapped to blockRAM primitives
+* Optional output register for improved timing
+* Can be implemented as pre-initialized ROM containing application firmware
 
 
 **Overview**
 
 Implementation of the processor-internal instruction memory is enabled by the processor's
-`MEM_INT_IMEM_EN` generic. The total memory size in bytes is defined via the `MEM_INT_IMEM_SIZE` generic.
+`IMEM_EN` generic. The total memory size in bytes is defined via the `IMEM_SIZE` generic.
 Note that this size should be a power of two to optimize physical implementation. If enabled,
 the IMEM is mapped to base address `0x00000000` (see section <<_address_space>>).
 
@@ -42,14 +51,15 @@ optimize area utilization, timing and power consumption.
 
 .Memory Size
 [NOTE]
-If the configured memory size (via the `MEM_INT_IMEM_SIZE` generic) is not a power of two the actual memory
+If the configured memory size (via the `IMEM_SIZE` generic) is not a power of two the actual memory
 size will be auto-adjusted to the next power of two (e.g. configuring a memory size of 60kB will result in a
 physical memory size of 64kB).
 
-.Legacy HDL Style
+.Output Register Stage
 [TIP]
-If synthesis fails to infer block RAM for the IMEM, turn on the `alt_style_c` option inside
-the memory's VHDL source file. When enabled, a different HDL style is used to describe the memory core.
+An optional output register stage can be enabled via `IMEM_OUTREG_EN`. For FPGA targets this might improve
+mapping/timing results. Note that this option will increase the read latency by one clock cycle. Write accesses
+are not affected by this at all.
 
 .Read-Only Access
 [NOTE]

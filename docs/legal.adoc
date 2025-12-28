@@ -10,9 +10,14 @@
 **The NEORV32 RISC-V Processor** +
 https://github.com/stnolting/neorv32 +
 Stephan Nolting, M.Sc. +
-🇪🇺 European Union +
-stnolting@gmail.com
+stnolting[ät]gmail[dot]com +
+image:https://img.shields.io/badge/European%20Union%20-Germany-000000.svg?longCache=true&style=flat-square&logo=europeanunion&colorA=003399&colorB=000000[]
 ==========================
+
+.DOI
+[NOTE]
+This project provides a _digital object identifier_ provided by https://zenodo.org[zenodo]:
+https://doi.org/10.5281/zenodo.5018888[image:https://zenodo.org/badge/DOI/10.5281/zenodo.5018888.svg[title='zenodo']]
 
 
 // ####################################################################################################################
@@ -55,7 +60,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 * "GitHub" is a subsidiary of Microsoft Corporation.
 * "Vivado" and "Artix" are trademarks of AMD Inc.
-* "AXI", "AXI", "AXI4-Lite", "AXI4-Stream", "AHB", "AHB3" and "AHB3-Lite" are trademarks of Arm Holdings plc.
+* "ARM", "AMBA", "AXI", "AXI4", "AXI4-Lite" and "AXI4-Stream" are trademarks of Arm Holdings plc.
 * "ModelSim" is a trademark of Mentor Graphics – A Siemens Business.
 * "Quartus [Prime]" and "Cyclone" are trademarks of Intel Corporation.
 * "iCE40", "UltraPlus" and "Radiant" are trademarks of Lattice Semiconductor Corporation.
@@ -65,7 +70,7 @@ POSSIBILITY OF SUCH DAMAGE.
 * "NeoPixel" is a trademark of Adafruit Industries.
 * "Segger Embedded Studio" and "J-Link" are trademarks of Segger Microcontroller Systems GmbH.
 * Images/figures made with _Microsoft Power Point_.
-* Timing diagrams made with _WaveDrom Editor_.
+* Diagrams made with _WaveDrom_.
 * Documentation made with `asciidoctor`.
 
 All further/unreferenced projects/products/brands belong to their according copyright holders.
@@ -86,23 +91,6 @@ is not under our control, we cannot assume any liability for such external conte
 information of the linked websites is liable for the content and accuracy of the information provided. At the
 point in time when the links were placed, no infringements of the law were recognizable to us. As soon as an
 infringement of the law becomes known to us, we will immediately remove the link in question.
-
-:sectnums!:
-=== Citing
-
-[NOTE]
-This is an open-source project that is free of charge. Use this project in any way you like
-(as long as it complies to the permissive license). Please cite it appropriately. 👍
-
-.Contributors & Community 🤝
-[NOTE]
-Please add as many https://github.com/stnolting/neorv32/graphs/contributors[contributors] as possible to the `author` field. +
-This project would not be where it is without them.
-
-.DOI
-[NOTE]
-This project provides a _digital object identifier_ provided by https://zenodo.org[zenodo]:
-https://doi.org/10.5281/zenodo.5018888[image:https://zenodo.org/badge/DOI/10.5281/zenodo.5018888.svg[title='zenodo']]
 
 :sectnums!:
 === Acknowledgments

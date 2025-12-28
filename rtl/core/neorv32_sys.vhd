@@ -3,7 +3,7 @@
 -- -------------------------------------------------------------------------------- --
 -- The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              --
 -- Copyright (c) NEORV32 contributors.                                              --
--- Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  --
+-- Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  --
 -- Licensed under the BSD-3-Clause license, see LICENSE for details.                --
 -- SPDX-License-Identifier: BSD-3-Clause                                            --
 -- ================================================================================ --
@@ -17,25 +17,27 @@ use neorv32.neorv32_package.all;
 entity neorv32_sys_reset is
   port (
     -- global control --
-    clk_i      : in  std_ulogic; -- global clock, rising edge
+    clk_i       : in  std_ulogic; -- global clock, rising edge
     -- reset sources --
-    rstn_ext_i : in  std_ulogic; -- external reset, low-active, async
-    rstn_wdt_i : in  std_ulogic; -- watchdog reset, low-active, sync
-    rstn_dbg_i : in  std_ulogic; -- debugger reset, low-active, sync
+    rstn_ext_i  : in  std_ulogic; -- external reset, low-active, async
+    rstn_wdt_i  : in  std_ulogic; -- watchdog reset, low-active, sync
+    rstn_dbg_i  : in  std_ulogic; -- debugger reset, low-active, sync
     -- reset nets --
-    rstn_ext_o : out std_ulogic; -- external reset, low-active, synchronized
-    rstn_sys_o : out std_ulogic  -- system reset, low-active, synchronized
+    rstn_ext_o  : out std_ulogic; -- external reset, low-active, synchronized
+    rstn_sys_o  : out std_ulogic; -- system reset, low-active, synchronized
+    -- processor reset outputs --
+    xrstn_wdt_o : out std_ulogic; -- reset from watchdog, low-active, sync
+    xrstn_ocd_o : out std_ulogic  -- reset from on-chip debugger, low-active, sync
   );
 end neorv32_sys_reset;
 
 architecture neorv32_sys_reset_rtl of neorv32_sys_reset is
 
-  signal sreg_sys, sreg_ext : std_ulogic_vector(3 downto 0);
+  signal sreg_ext, sreg_sys : std_ulogic_vector(3 downto 0);
 
 begin
 
-  -- Reset Sequencer ------------------------------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
+  -- reset sequencer --
   sequencer: process(rstn_ext_i, clk_i)
   begin
     if (rstn_ext_i = '0') then
@@ -57,6 +59,17 @@ begin
     end if;
   end process sequencer;
 
+  -- output synchronizer --
+  synchronizer: process(rstn_ext_i, clk_i)
+  begin
+    if (rstn_ext_i = '0') then
+      xrstn_wdt_o <= '0';
+      xrstn_ocd_o <= '0';
+    elsif rising_edge(clk_i) then
+      xrstn_wdt_o <= rstn_wdt_i;
+      xrstn_ocd_o <= rstn_dbg_i;
+    end if;
+  end process synchronizer;
 
 end neorv32_sys_reset_rtl;
 
@@ -69,7 +82,7 @@ end neorv32_sys_reset_rtl;
 -- -------------------------------------------------------------------------------- --
 -- The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              --
 -- Copyright (c) NEORV32 contributors.                                              --
--- Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  --
+-- Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  --
 -- Licensed under the BSD-3-Clause license, see LICENSE for details.                --
 -- SPDX-License-Identifier: BSD-3-Clause                                            --
 -- ================================================================================ --
@@ -82,35 +95,28 @@ library neorv32;
 use neorv32.neorv32_package.all;
 
 entity neorv32_sys_clock is
-  generic (
-    NUM_EN : natural -- number of enable-channels
-  );
   port (
-    clk_i    : in  std_ulogic; -- global clock, rising edge
-    rstn_i   : in  std_ulogic; -- global reset, low-active, async
-    enable_i : in  std_ulogic_vector(NUM_EN-1 downto 0); -- enable-channels
-    clk_en_o : out std_ulogic_vector(7 downto 0) -- clock-enable ticks
+    clk_i    : in  std_ulogic;                   -- global clock, rising edge
+    rstn_i   : in  std_ulogic;                   -- global reset, low-active, async
+    enable_i : in  std_ulogic;                   -- generator enable
+    clk_en_o : out std_ulogic_vector(7 downto 0) -- prescaled clock-enables
   );
 end neorv32_sys_clock;
 
 architecture neorv32_sys_clock_rtl of neorv32_sys_clock is
 
-  signal en : std_ulogic;
-  signal cnt, cnt2 : std_ulogic_vector(11 downto 0);
+  signal cnt, cnt2, edge : std_ulogic_vector(11 downto 0);
 
 begin
 
-  -- Clock Tick Generator -------------------------------------------------------------------
-  -- -------------------------------------------------------------------------------------------
+  -- tick generator --
   ticker: process(rstn_i, clk_i)
   begin
     if (rstn_i = '0') then
-      en   <= '0';
       cnt  <= (others => '0');
       cnt2 <= (others => '0');
     elsif rising_edge(clk_i) then
-      en <= or_reduce_f(enable_i);
-      if (en = '1') then
+      if (enable_i = '1') then
         cnt <= std_ulogic_vector(unsigned(cnt) + 1);
       else
         cnt <= (others => '0'); -- reset if disabled
@@ -119,15 +125,17 @@ begin
     end if;
   end process ticker;
 
-  -- clock enables: rising edge detectors --
-  clk_en_o(clk_div2_c)    <= cnt(0)  and (not cnt2(0));  -- clk_i / 2
-  clk_en_o(clk_div4_c)    <= cnt(1)  and (not cnt2(1));  -- clk_i / 4
-  clk_en_o(clk_div8_c)    <= cnt(2)  and (not cnt2(2));  -- clk_i / 8
-  clk_en_o(clk_div64_c)   <= cnt(5)  and (not cnt2(5));  -- clk_i / 64
-  clk_en_o(clk_div128_c)  <= cnt(6)  and (not cnt2(6));  -- clk_i / 128
-  clk_en_o(clk_div1024_c) <= cnt(9)  and (not cnt2(9));  -- clk_i / 1024
-  clk_en_o(clk_div2048_c) <= cnt(10) and (not cnt2(10)); -- clk_i / 2048
-  clk_en_o(clk_div4096_c) <= cnt(11) and (not cnt2(11)); -- clk_i / 4096
+  -- rising-edge detector --
+  edge <= cnt and (not cnt2);
 
+  -- clock enables: clk_en_o signals are high for one cycle --
+  clk_en_o(clk_div2_c)    <= edge(0);  -- clk_i / 2
+  clk_en_o(clk_div4_c)    <= edge(1);  -- clk_i / 4
+  clk_en_o(clk_div8_c)    <= edge(2);  -- clk_i / 8
+  clk_en_o(clk_div64_c)   <= edge(5);  -- clk_i / 64
+  clk_en_o(clk_div128_c)  <= edge(6);  -- clk_i / 128
+  clk_en_o(clk_div1024_c) <= edge(9);  -- clk_i / 1024
+  clk_en_o(clk_div2048_c) <= edge(10); -- clk_i / 2048
+  clk_en_o(clk_div4096_c) <= edge(11); -- clk_i / 4096
 
 end neorv32_sys_clock_rtl;

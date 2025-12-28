@@ -5,7 +5,7 @@
 -- -------------------------------------------------------------------------------- --
 -- The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              --
 -- Copyright (c) NEORV32 contributors.                                              --
--- Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  --
+-- Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  --
 -- Licensed under the BSD-3-Clause license, see LICENSE for details.                --
 -- SPDX-License-Identifier: BSD-3-Clause                                            --
 -- ================================================================================ --
@@ -25,35 +25,37 @@ entity neorv32_trng is
     clk_i     : in  std_ulogic; -- global clock line
     rstn_i    : in  std_ulogic; -- global reset line, low-active, async
     bus_req_i : in  bus_req_t;  -- bus request
-    bus_rsp_o : out bus_rsp_t   -- bus response
+    bus_rsp_o : out bus_rsp_t;  -- bus response
+    irq_o     : out std_ulogic  -- FIFO full interrupt
   );
 end neorv32_trng;
 
 architecture neorv32_trng_rtl of neorv32_trng is
 
-  -- neoTRNG Configuration --------------------------------------------------------------------------
-  constant num_cells_c     : natural := 3; -- total number of ring-oscillator cells
-  constant num_inv_start_c : natural := 5; -- number of inverters in first cell, has to be odd, min 3
-  -- ------------------------------------------------------------------------------------------------
+  -- neoTRNG Configuration ---------------------------------------------------------------------------
+  constant num_cells_c     : natural := 3;  -- total number of ring-oscillator cells
+  constant num_inv_start_c : natural := 5;  -- number of inverters in first cell, has to be odd, min 3
+  constant num_raw_bits_c  : natural := 64; -- number of raw bits to process for one output byte
+  -- -------------------------------------------------------------------------------------------------
 
   -- control register bits --
-  constant ctrl_en_c         : natural := 0; -- r/w: TRNG enable
-  constant ctrl_fifo_clr_c   : natural := 1; -- -/w: Clear data FIFO (auto clears)
-  constant ctrl_fifo_size0_c : natural := 2; -- r/-: log2(FIFO size) bit 0, LSB
-  constant ctrl_fifo_size3_c : natural := 5; -- r/-: log2(FIFO size) bit 3, MSB
-  constant ctrl_sim_mode_c   : natural := 6; -- r/-: TRNG implemented in pseudo-RNG simulation mode
-  constant ctrl_avail_c      : natural := 7; -- r/-: Random data available
+  constant ctrl_en_c       : natural := 0; -- r/w: TRNG enable
+  constant ctrl_fifo_clr_c : natural := 1; -- -/w: Clear data FIFO (auto clears)
+  constant ctrl_fifo0_c    : natural := 2; -- r/-: log2(FIFO size) bit 0, LSB
+  constant ctrl_fifo3_c    : natural := 5; -- r/-: log2(FIFO size) bit 3, MSB
+  constant ctrl_sim_mode_c : natural := 6; -- r/-: TRNG implemented in pseudo-RNG simulation mode
+  constant ctrl_avail_c    : natural := 7; -- r/-: Random data available
 
-  -- data register bits --
-  constant ctrl_data_lsb_c : natural := 0; -- r/-: random data bit 0, LSB
-  constant ctrl_data_msb_c : natural := 7; -- r/-: random data bit 7, MSB
+  -- helpers --
+  constant log2_fifo_size_c : natural := index_size_f(TRNG_FIFO);
 
   -- neoTRNG true random number generator --
   component neoTRNG
     generic (
-      NUM_CELLS     : natural range 1 to 99 := 3; -- number of ring-oscillator cells
-      NUM_INV_START : natural range 3 to 99 := 5; -- number of inverters in first cell, has to be odd, min 3
-      SIM_MODE      : boolean := false -- enable simulation mode (adding explicit propagation delay)
+      NUM_CELLS     : natural range 1 to 99   := 3; -- number of ring-oscillator cells
+      NUM_INV_START : natural range 3 to 99   := 5; -- number of inverters in first ring-oscillator cell, has to be odd
+      NUM_RAW_BITS  : natural range 1 to 4096 := 64; -- number of XOR-ed raw bits per random sample byte (has to be a power of 2)
+      SIM_MODE      : boolean                 := false -- enable simulation mode (no physical random if enabled!)
     );
     port (
       clk_i    : in  std_ulogic; -- module clock
@@ -67,53 +69,43 @@ architecture neorv32_trng_rtl of neorv32_trng is
   -- control register --
   signal enable, fifo_clr : std_ulogic;
 
-  -- data FIFO interface --
+  -- FIFO interface --
   type fifo_t is record
-    we    : std_ulogic; -- write enable
-    re    : std_ulogic; -- read enable
-    clear : std_ulogic; -- sync reset, high-active
-    wdata : std_ulogic_vector(7 downto 0); -- write data
-    rdata : std_ulogic_vector(7 downto 0); -- read data
-    avail : std_ulogic; -- data available?
-    half  : std_ulogic; -- at least half full?
-    free  : std_ulogic; -- space left?
+    we,    re    : std_ulogic;
+    wdata, rdata : std_ulogic_vector(7 downto 0);
+    avail, free  : std_ulogic;
+    clear        : std_ulogic;
   end record;
   signal fifo : fifo_t;
 
 begin
 
-  -- Bus Access ----------------------------------------------------------------------------
+  -- Bus Access -----------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   bus_access: process(rstn_i, clk_i)
   begin
     if (rstn_i = '0') then
       bus_rsp_o <= rsp_terminate_c;
-      fifo_clr  <= '0';
       enable    <= '0';
+      fifo_clr  <= '0';
     elsif rising_edge(clk_i) then
-      -- defaults --
+      -- bus handshake --
       bus_rsp_o.ack  <= bus_req_i.stb;
       bus_rsp_o.err  <= '0';
       bus_rsp_o.data <= (others => '0');
-      fifo_clr       <= '0'; -- auto-clear
       -- host access --
+      fifo_clr <= '0'; -- default
       if (bus_req_i.stb = '1') then
-        if (bus_req_i.rw = '1') then -- write access (control register)
+        if (bus_req_i.rw = '1') then -- write control register
           enable   <= bus_req_i.data(ctrl_en_c);
           fifo_clr <= bus_req_i.data(ctrl_fifo_clr_c);
-        else -- read access
-          if (bus_req_i.addr(2) = '0') then -- control register
-            bus_rsp_o.data(ctrl_en_c)                                  <= enable;
-            bus_rsp_o.data(ctrl_fifo_size3_c downto ctrl_fifo_size0_c) <= std_ulogic_vector(to_unsigned(index_size_f(TRNG_FIFO), 4));
-            bus_rsp_o.data(ctrl_sim_mode_c)                            <= bool_to_ulogic_f(is_simulation_c);
-            bus_rsp_o.data(ctrl_avail_c)                               <= fifo.avail;
-          else -- data register
-            if (fifo.avail = '0') then -- output zero if no data available
-              bus_rsp_o.data(ctrl_data_msb_c downto ctrl_data_lsb_c) <= (others => '0');
-            else
-              bus_rsp_o.data(ctrl_data_msb_c downto ctrl_data_lsb_c) <= fifo.rdata;
-            end if;
-          end if;
+        elsif (bus_req_i.addr(2) = '0') then -- read control register
+          bus_rsp_o.data(ctrl_en_c)                        <= enable;
+          bus_rsp_o.data(ctrl_fifo3_c downto ctrl_fifo0_c) <= std_ulogic_vector(to_unsigned(log2_fifo_size_c, 4));
+          bus_rsp_o.data(ctrl_sim_mode_c)                  <= bool_to_ulogic_f(is_simulation_c);
+          bus_rsp_o.data(ctrl_avail_c)                     <= fifo.avail;
+        else -- read data register
+          bus_rsp_o.data(7 downto 0) <= fifo.rdata;
         end if;
       end if;
     end if;
@@ -126,6 +118,7 @@ begin
     generic map (
       NUM_CELLS     => num_cells_c,
       NUM_INV_START => num_inv_start_c,
+      NUM_RAW_BITS  => num_raw_bits_c,
       SIM_MODE      => is_simulation_c
     )
     port map (
@@ -139,83 +132,89 @@ begin
 
   -- Data FIFO ("Random Pool") --------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  rnd_pool_fifo_inst: entity neorv32.neorv32_fifo
+  rnd_pool_fifo_inst: entity neorv32.neorv32_prim_fifo
   generic map (
-    FIFO_DEPTH => TRNG_FIFO, -- number of FIFO entries; has to be a power of two; min 1
-    FIFO_WIDTH => 8,         -- size of data elements in FIFO
-    FIFO_RSYNC => true,      -- sync read
-    FIFO_SAFE  => true,      -- safe access
-    FULL_RESET => false      -- no HW reset, try to infer BRAM
+    AWIDTH  => log2_fifo_size_c,
+    DWIDTH  => 8,
+    OUTGATE => true -- output zero if no data available
   )
   port map (
-    -- control --
-    clk_i   => clk_i,      -- clock, rising edge
-    rstn_i  => rstn_i,     -- async reset, low-active
-    clear_i => fifo.clear, -- sync reset, high-active
-    half_o  => fifo.half,  -- at least half full
+    -- global control --
+    clk_i   => clk_i,
+    rstn_i  => rstn_i,
+    clear_i => fifo.clear,
     -- write port --
-    wdata_i => fifo.wdata, -- write data
-    we_i    => fifo.we,    -- write enable
-    free_o  => fifo.free,  -- at least one entry is free when set
+    wdata_i => fifo.wdata,
+    we_i    => fifo.we,
+    free_o  => fifo.free,
     -- read port --
-    re_i    => fifo.re,    -- read enable
-    rdata_o => fifo.rdata, -- read data
-    avail_o => fifo.avail  -- data available when set
+    re_i    => fifo.re,
+    rdata_o => fifo.rdata,
+    avail_o => fifo.avail
   );
 
   fifo.clear <= '1' when (enable = '0') or (fifo_clr = '1') else '0';
   fifo.re    <= '1' when (bus_req_i.stb = '1') and (bus_req_i.rw = '0') and (bus_req_i.addr(2) = '1') else '0';
 
+  -- interrupt generator --
+  irq_gen: process(rstn_i, clk_i)
+  begin
+    if (rstn_i = '0') then
+      irq_o <= '0';
+    elsif rising_edge(clk_i) then
+      irq_o <= enable and (not fifo.free); -- FIFO full
+    end if;
+  end process irq_gen;
 
 end neorv32_trng_rtl;
 
 
--- #################################################################################################
--- # neoTRNG - A Tiny and Platform-Independent True Random Number Generator (Version 3.2)          #
--- # https://github.com/stnolting/neoTRNG                                                          #
--- # ********************************************************************************************* #
--- # The neoTNG true-random number generator samples free-running ring-oscillators (combinatorial  #
--- # loops) to obtain *phase noise* hat is used as entropy source. The individual ring-oscillators #
--- # are based on plain inverter chains that are decoupled using individually-enabled latches in   #
--- # order to prevent the synthesis tool from trimming parts of the logic.                         #
--- #                                                                                               #
--- # Hence, the TRNG provides a platform- agnostic architecture that can be implemented for any    #
--- # FPGA/ASIC without requiring primitive instantiation or technology-specific attributes or      #
--- # platform-specific synthesis options.                                                          #
--- #                                                                                               #
--- # The random output from each entropy cells is synchronized and XOR-ed with the other cell's    #
--- # outputs before it is and fed into a simple 2-bit "John von Neumann randomness extractor"      #
--- # (extracting edges). A total of 64 de-biased bits are combined using a LFSR-style shift        #
--- # register (for improved spectral distribution) to provide one final random data byte.          #
--- # ********************************************************************************************* #
--- # BSD 3-Clause License                                                                          #
--- #                                                                                               #
--- # Copyright (c) 2024, Stephan Nolting. All rights reserved.                                     #
--- #                                                                                               #
--- # Redistribution and use in source and binary forms, with or without modification, are          #
--- # permitted provided that the following conditions are met:                                     #
--- #                                                                                               #
--- # 1. Redistributions of source code must retain the above copyright notice, this list of        #
--- #    conditions and the following disclaimer.                                                   #
--- #                                                                                               #
--- # 2. Redistributions in binary form must reproduce the above copyright notice, this list of     #
--- #    conditions and the following disclaimer in the documentation and/or other materials        #
--- #    provided with the distribution.                                                            #
--- #                                                                                               #
--- # 3. Neither the name of the copyright holder nor the names of its contributors may be used to  #
--- #    endorse or promote products derived from this software without specific prior written      #
--- #    permission.                                                                                #
--- #                                                                                               #
--- # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS   #
--- # OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF               #
--- # MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE    #
--- # COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,     #
--- # EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE #
--- # GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED    #
--- # AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING     #
--- # NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED  #
--- # OF THE POSSIBILITY OF SUCH DAMAGE.                                                            #
--- #################################################################################################
+-- ============================================================================================= --
+-- neoTRNG - A Tiny and Platform-Independent True Random Number Generator (Version 3.3)          --
+-- https://github.com/stnolting/neoTRNG                                                          --
+-- ============================================================================================= --
+-- The neoTNG true-random number generator samples free-running ring-oscillators (combinatorial  --
+-- loops) to obtain *phase noise* hat is used as entropy source. The individual ring-oscillators --
+-- are based on plain inverter chains that are decoupled using individually-enabled latches in   --
+-- order to prevent the synthesis tool from trimming parts of the logic.                         --
+--                                                                                               --
+-- Hence, the TRNG provides a platform- agnostic architecture that can be implemented for any    --
+-- FPGA/ASIC without requiring primitive instantiation or technology-specific attributes or      --
+-- platform-specific synthesis options.                                                          --
+--                                                                                               --
+-- The random output from each entropy cells is synchronized and XOR-ed with the other cell's    --
+-- outputs before it is and fed into a simple 2-bit "John von Neumann randomness extractor"      --
+-- (extracting edges). <NUM_RAW_BITS> de-biased bits are combined using an CRC-style shift       --
+-- register (entropy compression) to generate one final random data byte.                        --
+-- ============================================================================================= --
+-- BSD 3-Clause License                                                                          --
+--                                                                                               --
+-- Copyright (c) 2025, Stephan Nolting. All rights reserved.                                     --
+--                                                                                               --
+-- Redistribution and use in source and binary forms, with or without modification, are          --
+-- permitted provided that the following conditions are met:                                     --
+--                                                                                               --
+-- 1. Redistributions of source code must retain the above copyright notice, this list of        --
+--    conditions and the following disclaimer.                                                   --
+--                                                                                               --
+-- 2. Redistributions in binary form must reproduce the above copyright notice, this list of     --
+--    conditions and the following disclaimer in the documentation and/or other materials        --
+--    provided with the distribution.                                                            --
+--                                                                                               --
+-- 3. Neither the name of the copyright holder nor the names of its contributors may be used to  --
+--    endorse or promote products derived from this software without specific prior written      --
+--    permission.                                                                                --
+--                                                                                               --
+-- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS   --
+-- OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF               --
+-- MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE    --
+-- COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,     --
+-- EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE --
+-- GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED    --
+-- AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING     --
+-- NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED  --
+-- OF THE POSSIBILITY OF SUCH DAMAGE.                                                            --
+-- ============================================================================================= --
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -223,9 +222,10 @@ use ieee.numeric_std.all;
 
 entity neoTRNG is
   generic (
-    NUM_CELLS     : natural range 1 to 99 := 3; -- number of ring-oscillator cells
-    NUM_INV_START : natural range 3 to 99 := 5; -- number of inverters in first ring-oscillator cell, has to be odd
-    SIM_MODE      : boolean := false -- enable simulation mode (no physical random if enabled!)
+    NUM_CELLS     : natural range 1 to 99   := 3; -- number of ring-oscillator cells
+    NUM_INV_START : natural range 3 to 99   := 5; -- number of inverters in first ring-oscillator cell, has to be odd
+    NUM_RAW_BITS  : natural range 1 to 4096 := 64; -- number of XOR-ed raw bits per random sample byte (has to be a power of 2)
+    SIM_MODE      : boolean                 := false -- enable simulation mode (no physical random if enabled!)
   );
   port (
     clk_i    : in  std_ulogic; -- module clock
@@ -237,6 +237,17 @@ entity neoTRNG is
 end neoTRNG;
 
 architecture neoTRNG_rtl of neoTRNG is
+
+  -- round_up[log2(x)] --
+  function clog2_f(x : natural) return natural is
+  begin
+    for i in 0 to natural'high loop
+      if (2**i >= x) then
+        return i;
+      end if;
+    end loop;
+    return 0;
+  end function clog2_f;
 
   -- entropy source cell --
   component neoTRNG_cell
@@ -254,10 +265,10 @@ architecture neoTRNG_rtl of neoTRNG is
   end component;
 
   -- entropy cell interconnect --
-  signal cell_en_in   : std_ulogic_vector(NUM_CELLS-1 downto 0); -- enable-sreg input
-  signal cell_en_out  : std_ulogic_vector(NUM_CELLS-1 downto 0); -- enable-sreg output
-  signal cell_rnd     : std_ulogic_vector(NUM_CELLS-1 downto 0); -- cell random output
-  signal cell_sum     : std_ulogic; -- combined random data
+  signal cell_en_in  : std_ulogic_vector(NUM_CELLS-1 downto 0); -- enable-sreg input
+  signal cell_en_out : std_ulogic_vector(NUM_CELLS-1 downto 0); -- enable-sreg output
+  signal cell_rnd    : std_ulogic_vector(NUM_CELLS-1 downto 0); -- cell random output
+  signal cell_sum    : std_ulogic; -- combined random data
 
   -- de-biasing --
   signal debias_sreg  : std_ulogic_vector(1 downto 0); -- sample buffer
@@ -266,20 +277,26 @@ architecture neoTRNG_rtl of neoTRNG is
   signal debias_data  : std_ulogic; -- result bit
 
   -- sampling control --
-  signal sample_en    : std_ulogic; -- global enable
-  signal sample_sreg  : std_ulogic_vector(7 downto 0); -- shift-register / de-serializer
-  signal sample_cnt   : std_ulogic_vector(6 downto 0); -- bits-per-sample (64) counter
+  signal sample_en   : std_ulogic; -- global enable
+  signal sample_sreg : std_ulogic_vector(7 downto 0); -- shift-register / de-serializer
+  signal sample_cnt  : std_ulogic_vector(clog2_f(NUM_RAW_BITS) downto 0); -- bits-per-sample counter
+
+  -- CRC polynomial (tap mask) --
+  constant poly_c : std_ulogic_vector(7 downto 0) := "00000111"; -- CRC-8: x^8 + x^2 + x^1 + x^0
 
 begin
 
   -- Sanity Checks --------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   assert false report
-    "[neoTRNG] The neoTRNG (v3.2) - A Tiny and Platform-Independent True Random Number Generator, " &
+    "[neoTRNG] The neoTRNG (v3.3) - A Tiny and Platform-Independent True Random Number Generator, " &
     "https://github.com/stnolting/neoTRNG" severity note;
 
   assert (NUM_INV_START mod 2) /= 0 report
-    "[neoTRNG] Number of inverters in first cell <NUM_INV_START> has to be odd!" severity error;
+    "[neoTRNG] Number of inverters in first cell [NUM_INV_START] has to be odd!" severity error;
+
+  assert 2**clog2_f(NUM_RAW_BITS) = NUM_RAW_BITS report
+    "[neoTRNG] Number of pre-processed raw bits [NUM_RAW_BITS] has to be a power of 2!" severity error;
 
   assert not SIM_MODE report
     "[neoTRNG] Simulation-mode enabled (NO TRUE/PHYSICAL RANDOM)!" severity warning;
@@ -351,9 +368,14 @@ begin
       if (sample_en = '0') or (sample_cnt(sample_cnt'left) = '1') then -- start new iteration
         sample_cnt  <= (others => '0');
         sample_sreg <= (others => '0');
-      elsif (debias_valid = '1') then -- LFSR-style sampling shift-register to scramble and mix random stream
-        sample_cnt  <= std_ulogic_vector(unsigned(sample_cnt) + 1);
-        sample_sreg <= sample_sreg(6 downto 0) & (sample_sreg(7) xor debias_data);
+      elsif (debias_valid = '1') then -- valid raw random bit
+        sample_cnt <= std_ulogic_vector(unsigned(sample_cnt) + 1);
+        -- CRC-style sampling shift-register to mix random stream --
+        if ((sample_sreg(sample_sreg'left) xor debias_data) = '1') then -- feedback bit
+          sample_sreg <= (sample_sreg(sample_sreg'left-1 downto 0) & '0') xor poly_c;
+        else
+          sample_sreg <= (sample_sreg(sample_sreg'left-1 downto 0) & '0');
+        end if;
       end if;
     end if;
   end process sampling_control;
@@ -364,11 +386,12 @@ begin
 
 end neoTRNG_rtl;
 
--- **********************************************************************************************************
--- neoTRNG entropy source cell, based on a simple ring-oscillator constructed from an odd number
--- of inverter. The inverters are decoupled using individually-enabled latches to prevent synthesis
--- from "optimizing" (=removing) parts of the oscillator chain.
--- **********************************************************************************************************
+
+-- ================================================================================================ --
+-- neoTRNG entropy source cell, based on a simple ring-oscillator constructed from an odd number    --
+-- of inverter. The inverters are decoupled using individually-enabled latches to prevent synthesis --
+-- from "optimizing" (=removing) parts of the oscillator chain.                                     --
+-- ================================================================================================ --
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -436,7 +459,7 @@ begin
       inv_out(i) <= not inv_in(i); -- this is one part of the ring oscillator's physical propagation delay
     end generate;
 
-    -- inverter with "propagation delay (as a simple FF)" --
+    -- inverter with "propagation delay" (implemented as a simple FF) --
     inverter_sim:
     if SIM_MODE generate -- for SIMULATION ONLY
       inverter_sim_ff: process(clk_i) -- this will NOT generate true random numbers

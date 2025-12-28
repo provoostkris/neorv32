@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -27,11 +27,21 @@
 
 
 /**********************************************************************//**
+ * Simple busy-wait helper.
+ *
+ * @param[in] time_ms Time in ms to wait (unsigned 32-bit).
+ **************************************************************************/
+void delay_ms(uint32_t time_ms) {
+  neorv32_aux_delay_ms(neorv32_sysinfo_get_clk(), time_ms);
+}
+
+
+/**********************************************************************//**
  * Main function
  *
  * @note This program requires the WDT and UART0 to be synthesized.
  *
- * @return 0 if execution was successful
+ * @return Should never return.
  **************************************************************************/
 int main() {
 
@@ -41,14 +51,15 @@ int main() {
   // setup UART at default baud rate, no interrupts
   neorv32_uart0_setup(BAUD_RATE, 0);
 
-  // check if WDT is implemented at all
-  if (neorv32_wdt_available() == 0) {
-    return 1; // WDT not synthesized
-  }
-
   // check if UART0 is implemented at all
   if (neorv32_uart0_available() == 0) {
-    return 1; // UART0 not synthesized
+    return -1; // UART0 not synthesized
+  }
+
+  // check if WDT is implemented at all
+  if (neorv32_wdt_available() == 0) {
+    neorv32_uart0_puts("\nWDT not synthesized!\n");
+    return -1;
   }
 
 
@@ -82,16 +93,16 @@ int main() {
     return -1;
   }
 
-  // setup watchdog: no lock, disable in debug mode, enable in sleep mode, enable strict mode
+  // setup watchdog: no lock
   neorv32_uart0_puts("Starting WDT...\n");
-  neorv32_wdt_setup(timeout, 0, 0, 1, 1);
+  neorv32_wdt_setup(timeout, 0);
 
 
   // feed the watchdog
   neorv32_uart0_puts("Resetting WDT 5 times...\n");
   int i;
   for (i=0; i<5; i++) {
-    neorv32_cpu_delay_ms(750);
+    delay_ms(750);
     neorv32_wdt_feed(WDT_PASSWORD); // reset internal counter using the access password
     neorv32_uart0_puts("WDT reset.\n");
   }

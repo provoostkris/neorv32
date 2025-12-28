@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -9,10 +9,6 @@
 /**
  * @file neorv32_spi.c
  * @brief Serial peripheral interface controller (SPI) HW driver source file.
- *
- * @note These functions should only be used if the SPI unit was synthesized (IO_SPI_EN = true).
- *
- * @see https://stnolting.github.io/neorv32/sw/files.html
  */
 
 #include <neorv32.h>
@@ -21,16 +17,11 @@
 /**********************************************************************//**
  * Check if SPI unit was synthesized.
  *
- * @return 0 if SPI was not synthesized, 1 if SPI is available.
+ * @return 0 if SPI was not synthesized, non-zero if SPI is available.
  **************************************************************************/
 int neorv32_spi_available(void) {
 
-  if (NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_SPI)) {
-    return 1;
-  }
-  else {
-    return 0;
-  }
+  return (int)(NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_SPI));
 }
 
 
@@ -41,9 +32,8 @@ int neorv32_spi_available(void) {
  * @prama[in] cdiv Clock divider (0..15).
  * @param[in] clk_phase Clock phase (0=sample on rising edge, 1=sample on falling edge).
  * @param[in] clk_polarity Clock polarity (when idle).
- * @param[in] irq_mask Interrupt configuration mask (CTRL's irq_* bits).
  **************************************************************************/
-void neorv32_spi_setup(int prsc, int cdiv, int clk_phase, int clk_polarity, uint32_t irq_mask) {
+void neorv32_spi_setup(int prsc, int cdiv, int clk_phase, int clk_polarity) {
 
   NEORV32_SPI->CTRL = 0; // reset
 
@@ -53,27 +43,8 @@ void neorv32_spi_setup(int prsc, int cdiv, int clk_phase, int clk_polarity, uint
   tmp |= (uint32_t)(clk_polarity & 0x01) << SPI_CTRL_CPOL;
   tmp |= (uint32_t)(prsc         & 0x07) << SPI_CTRL_PRSC0;
   tmp |= (uint32_t)(cdiv         & 0x0f) << SPI_CTRL_CDIV0;
-  tmp |= (uint32_t)(irq_mask     & (0x0f << SPI_CTRL_IRQ_RX_AVAIL));
 
   NEORV32_SPI->CTRL = tmp;
-}
-
-
-/**********************************************************************//**
- * Enable high-speed mode.
- **************************************************************************/
-void neorv32_spi_highspeed_enable(void) {
-
-  NEORV32_SPI->CTRL |= ((uint32_t)(1 << SPI_CTRL_HIGHSPEED));
-}
-
-
-/**********************************************************************//**
- * Disable high-speed mode.
- **************************************************************************/
-void neorv32_spi_highspeed_disable(void) {
-
-  NEORV32_SPI->CTRL &= ~((uint32_t)(1 << SPI_CTRL_HIGHSPEED));
 }
 
 
@@ -90,15 +61,7 @@ uint32_t neorv32_spi_get_clock_speed(void) {
   uint32_t prsc_sel  = (ctrl >> SPI_CTRL_PRSC0) & 0x7;
   uint32_t clock_div = (ctrl >> SPI_CTRL_CDIV0) & 0xf;
 
-  uint32_t tmp;
-
-  if (ctrl & (1 << SPI_CTRL_HIGHSPEED)) { // high-speed mode enabled?
-    tmp = 2 * 1 * (1 + clock_div);
-  }
-  else {
-    tmp = 2 * PRSC_LUT[prsc_sel] * (1 + clock_div);
-  }
-
+  uint32_t tmp = 2 * PRSC_LUT[prsc_sel] * (1 + clock_div);
   return neorv32_sysinfo_get_clk() / tmp;
 }
 
@@ -143,7 +106,7 @@ int neorv32_spi_get_fifo_depth(void) {
  **************************************************************************/
 void neorv32_spi_cs_en(int cs) {
 
-  while(NEORV32_SPI->CTRL & (1<<SPI_CTRL_TX_FULL)); // wait for free space in TX FIFO
+  while (NEORV32_SPI->CTRL & (1<<SPI_CTRL_TX_FULL)); // wait for free space in TX FIFO
   neorv32_spi_cs_en_nonblocking(cs);
 }
 
@@ -156,7 +119,7 @@ void neorv32_spi_cs_en(int cs) {
  **************************************************************************/
 void neorv32_spi_cs_dis(void) {
 
-  while(NEORV32_SPI->CTRL & (1<<SPI_CTRL_TX_FULL)); // wait for free space in TX FIFO
+  while (NEORV32_SPI->CTRL & (1<<SPI_CTRL_TX_FULL)); // wait for free space in TX FIFO
   neorv32_spi_cs_dis_nonblocking();
 }
 
@@ -169,7 +132,7 @@ void neorv32_spi_cs_dis(void) {
  * @param tx_data Transmit data (8-bit, LSB-aligned).
  * @return Receive data (8-bit, LSB-aligned).
  **************************************************************************/
-uint8_t neorv32_spi_trans(uint8_t tx_data) {
+uint8_t neorv32_spi_transfer(uint8_t tx_data) {
 
   neorv32_spi_put_nonblocking(tx_data);
   while (neorv32_spi_busy()); // wait for current transfer to finish
@@ -226,30 +189,53 @@ void neorv32_spi_cs_dis_nonblocking(void) {
 /**********************************************************************//**
  * Check if any chip-select line is active.
  *
- * @return 0 if no CS lines are active, 1 if at least one CS line is active.
+ * @return Zero if no CS lines are active, non-zero if a CS line is active.
  **************************************************************************/
 int neorv32_spi_check_cs(void) {
 
-  if (NEORV32_SPI->CTRL & (1<<SPI_CS_ACTIVE)) {
-    return 1;
-  }
-  else {
-    return 0;
-  }
+  return (int)(NEORV32_SPI->CTRL & (1 << SPI_CS_ACTIVE));
+}
+
+
+/**********************************************************************//**
+ * Check if RX FIFO data is available.
+ *
+ * @return Zero if no data available, non-zero if RX FIFO data is available.
+ **************************************************************************/
+int neorv32_spi_rx_avail(void) {
+
+  return (int)(NEORV32_SPI->CTRL & (1 << SPI_CTRL_RX_AVAIL));
+}
+
+
+/**********************************************************************//**
+ * Check if TX FIFO is empty.
+ *
+ * @return Zero if RX FIFO is not empty, non-zero if RX FIFO is empty.
+ **************************************************************************/
+int neorv32_spi_tx_empty(void) {
+
+  return (int)(NEORV32_SPI->CTRL & (1 << SPI_CTRL_TX_EMPTY));
+}
+
+
+/**********************************************************************//**
+ * Check if TX FIFO is full.
+ *
+ * @return Zero if TX FIFO is not full, non-zero if TX FIFO is full.
+ **************************************************************************/
+int neorv32_spi_tx_full(void) {
+
+  return (int)(NEORV32_SPI->CTRL & (1 << SPI_CTRL_TX_FULL));
 }
 
 
 /**********************************************************************//**
  * Check if SPI transceiver is busy or TX FIFO not empty.
  *
- * @return 0 if idle, 1 if busy
+ * @return 0 if idle, non-zero if busy
  **************************************************************************/
 int neorv32_spi_busy(void) {
 
-  if ((NEORV32_SPI->CTRL & (1<<SPI_CTRL_BUSY)) != 0) {
-    return 1;
-  }
-  else {
-    return 0;
-  }
+  return (int)(NEORV32_SPI->CTRL & (1 << SPI_CTRL_BUSY));
 }

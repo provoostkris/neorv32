@@ -8,9 +8,7 @@
 
 /**
  * @file neorv32_clint.c
- * @brief Hardware Local Interruptor (CLINT) HW driver source file.
- *
- * @see https://stnolting.github.io/neorv32/sw/files.html
+ * @brief Core-Local Interruptor (CLINT) HW driver source file.
  */
 
 #include <neorv32.h>
@@ -19,16 +17,11 @@
 /**********************************************************************//**
  * Check if CLINT module was synthesized.
  *
- * @return 0 if CLINT was not synthesized, 1 if CLINT is available.
+ * @return 0 if CLINT was not synthesized, non-zero if CLINT is available.
  **************************************************************************/
 int neorv32_clint_available(void) {
 
-  if (NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_CLINT)) {
-    return 1;
-  }
-  else {
-    return 0;
-  }
+  return (int)(NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_CLINT));
 }
 
 
@@ -93,7 +86,7 @@ void neorv32_clint_time_set(uint64_t time) {
  **************************************************************************/
 uint64_t neorv32_clint_time_get(void) {
 
-  uint32_t tmp1, tmp2, tmp3;
+  uint32_t tmp1 = 0, tmp2 = 0, tmp3 = 0;
   while(1) {
     tmp1 = NEORV32_CLINT->MTIME.uint32[1];
     tmp2 = NEORV32_CLINT->MTIME.uint32[0];

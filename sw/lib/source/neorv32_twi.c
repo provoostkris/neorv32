@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -9,10 +9,6 @@
 /**
  * @file neorv32_twi.c
  * @brief Two-Wire Interface Controller (TWI) HW driver source file.
- *
- * @note These functions should only be used if the TWI unit was synthesized (IO_TWI_EN = true).
- *
- * @see https://stnolting.github.io/neorv32/sw/files.html
  */
 
 #include <neorv32.h>
@@ -21,16 +17,11 @@
 /**********************************************************************//**
  * Check if TWI unit was synthesized.
  *
- * @return 0 if TWI was not synthesized, 1 if TWI is available.
+ * @return 0 if TWI was not synthesized, non-zero if TWI is available.
  **************************************************************************/
 int neorv32_twi_available(void) {
 
-  if (NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_TWI)) {
-    return 1;
-  }
-  else {
-    return 0;
-  }
+  return (int)(NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_TWI));
 }
 
 
@@ -159,21 +150,12 @@ int neorv32_twi_get(uint8_t *data) {
  * @param[in] mack Generate ACK by host controller when set.
  * @return 0: ACK received, 1: NACK received.
  **************************************************************************/
-int neorv32_twi_trans(uint8_t *data, int mack) {
-
-  uint8_t rx_data;
-  int device_ack;
+int neorv32_twi_transfer(uint8_t *data, int mack) {
 
   while (NEORV32_TWI->CTRL & (1<<TWI_CTRL_TX_FULL)); // wait for free TX entry
-
   neorv32_twi_send_nonblocking(*data, mack); // send address + R/W (+ host ACK)
-
-  do {
-    device_ack = neorv32_twi_get(&rx_data);
-  } while (device_ack == -1); // wait until data available
-
-  *data = rx_data;
-  return device_ack;
+  while (NEORV32_TWI->CTRL & (1 << TWI_CTRL_BUSY)); // wait until idle again
+  return neorv32_twi_get(data);
 }
 
 

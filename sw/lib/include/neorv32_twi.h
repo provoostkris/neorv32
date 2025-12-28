@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -9,14 +9,10 @@
 /**
  * @file neorv32_twi.h
  * @brief Two-Wire Interface Controller (TWI) HW driver header file.
- *
- * @note These functions should only be used if the TWI unit was synthesized (IO_TWI_EN = true).
- *
- * @see https://stnolting.github.io/neorv32/sw/files.html
  */
 
-#ifndef neorv32_twi_h
-#define neorv32_twi_h
+#ifndef NEORV32_TWI_H
+#define NEORV32_TWI_H
 
 #include <stdint.h>
 
@@ -28,10 +24,10 @@
 /** TWI module prototype */
 typedef volatile struct __attribute__((packed,aligned(4))) {
   uint32_t CTRL; /**< offset 0: control register (#NEORV32_TWI_CTRL_enum) */
-  uint32_t DCMD; /**< offset 4: data/cmd register (#NEORV32_TWI_DCMD_enum) */
+  uint32_t DCMD; /**< offset 4: data/command register (#NEORV32_TWI_DCMD_enum) */
 } neorv32_twi_t;
 
-/** TWI module hardware access (#neorv32_twi_t) */
+/** TWI module hardware handle (#neorv32_twi_t) */
 #define NEORV32_TWI ((neorv32_twi_t*) (NEORV32_TWI_BASE))
 
 /** TWI control register bits */
@@ -46,8 +42,8 @@ enum NEORV32_TWI_CTRL_enum {
   TWI_CTRL_CDIV3     =  7, /**< TWI control register(7)  (r/w): Clock divider bit 3 */
   TWI_CTRL_CLKSTR    =  8, /**< TWI control register(8)  (r/w): Enable/allow clock stretching */
 
-  TWI_CTRL_FIFO_LSB  = 15, /**< TWI control register(15) (r/-): log2(FIFO size), lsb */
-  TWI_CTRL_FIFO_MSB  = 18, /**< TWI control register(18) (r/-): log2(FIFO size), msb */
+  TWI_CTRL_FIFO_LSB  = 15, /**< TWI control register(15) (r/-): log2(FIFO size), LSB */
+  TWI_CTRL_FIFO_MSB  = 18, /**< TWI control register(18) (r/-): log2(FIFO size), MSB */
 
   TWI_CTRL_SENSE_SCL = 27, /**< TWI control register(27) (r/-): current state of the SCL bus line */
   TWI_CTRL_SENSE_SDA = 28, /**< TWI control register(28) (r/-): current state of the SDA bus line */
@@ -58,11 +54,11 @@ enum NEORV32_TWI_CTRL_enum {
 
 /** TWI command/data register bits */
 enum NEORV32_TWI_DCMD_enum {
-  TWI_DCMD_LSB    =  0, /**< TWI data register(0)  (r/w): Receive/transmit data (8-bit) LSB */
-  TWI_DCMD_MSB    =  7, /**< TWI data register(7)  (r/w): Receive/transmit data (8-bit) MSB */
+  TWI_DCMD_LSB    =  0, /**< TWI data register(0)  (r/w): Receive/transmit data (8-bit), LSB */
+  TWI_DCMD_MSB    =  7, /**< TWI data register(7)  (r/w): Receive/transmit data (8-bit), MSB */
   TWI_DCMD_ACK    =  8, /**< TWI data register(8)  (r/w): RX = ACK/NACK, TX = MACK */
-  TWI_DCMD_CMD_LO =  9, /**< TWI data register(9)  (r/w): CMD lsb */
-  TWI_DCMD_CMD_HI = 10  /**< TWI data register(10) (r/w): CMD msb */
+  TWI_DCMD_CMD_LO =  9, /**< TWI data register(9)  (r/w): Operation command (#NEORV32_TWI_DCMD_CMD_enum), LSB */
+  TWI_DCMD_CMD_HI = 10  /**< TWI data register(10) (r/w): Operation command (#NEORV32_TWI_DCMD_CMD_enum), MSB */
 };
 /**@}*/
 
@@ -71,10 +67,12 @@ enum NEORV32_TWI_DCMD_enum {
  * @name TWI commands
  **************************************************************************/
 /**@{*/
-#define TWI_CMD_NOP   (0b00) // no operation
-#define TWI_CMD_START (0b01) // generate start condition
-#define TWI_CMD_STOP  (0b10) // generate stop condition
-#define TWI_CMD_RTX   (0b11) // transmit+receive data byte
+enum NEORV32_TWI_DCMD_CMD_enum {
+  TWI_CMD_NOP   = 0b00, /**< 0b00: no operation */
+  TWI_CMD_START = 0b01, /**< 0b01: generate start condition */
+  TWI_CMD_STOP  = 0b10, /**< 0b10: generate stop condition */
+  TWI_CMD_RTX   = 0b11  /**< 0b11: transmit+receive data byte */
+};
 /**@}*/
 
 
@@ -88,13 +86,13 @@ int  neorv32_twi_get_fifo_depth(void);
 void neorv32_twi_disable(void);
 void neorv32_twi_enable(void);
 
-int neorv32_twi_sense_scl(void);
-int neorv32_twi_sense_sda(void);
+int  neorv32_twi_sense_scl(void);
+int  neorv32_twi_sense_sda(void);
 
 int  neorv32_twi_busy(void);
 int  neorv32_twi_get(uint8_t *data);
 
-int  neorv32_twi_trans(uint8_t *data, int mack);
+int  neorv32_twi_transfer(uint8_t *data, int mack);
 void neorv32_twi_generate_stop(void);
 void neorv32_twi_generate_start(void);
 
@@ -104,4 +102,4 @@ void neorv32_twi_generate_start_nonblocking(void);
 /**@}*/
 
 
-#endif // neorv32_twi_h
+#endif // NEORV32_TWI_H

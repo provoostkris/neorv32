@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -15,22 +15,39 @@
 
 #include <neorv32.h>
 
-
-/**********************************************************************//**
- * @name User configuration
- **************************************************************************/
-/**@{*/
-/** UART BAUD rate */
+// UART BAUD rate
 #define BAUD_RATE 19200
-/**@}*/
 
+// global variables
+volatile int irq_ack = 0;
 
 // prototypes
+void irq_test(void);
 void print_random_data(void);
+void print_hex(void);
+void aux_print_hex_byte(uint8_t byte);
 void repetition_count_test(void);
 void adaptive_proportion_test(void);
 void generate_histogram(void);
 void compute_rate(void);
+
+
+/**********************************************************************//**
+ * Simple bus-wait helper.
+ *
+ * @param[in] time_ms Time in ms to wait (unsigned 32-bit).
+ **************************************************************************/
+void delay_ms(uint32_t time_ms) {
+  neorv32_aux_delay_ms(neorv32_sysinfo_get_clk(), time_ms);
+}
+
+/**********************************************************************//**
+ * TRNG interrupt handler.
+ **************************************************************************/
+void trng_firq_handler(void) {
+  neorv32_trng_fifo_clear();
+  irq_ack = 1;
+}
 
 
 /**********************************************************************//**
@@ -47,9 +64,10 @@ int main(void) {
     return 1;
   }
 
-  // capture all exceptions and give debug info via UART
-  // this is not required, but keeps us safe
+  // setup NEORV32 runtime environment
   neorv32_rte_setup();
+  neorv32_rte_handler_install(TRNG_TRAP_CODE, trng_firq_handler);
+  neorv32_cpu_csr_set(CSR_MSTATUS, 1 << CSR_MSTATUS_MIE);
 
   // setup UART at default baud rate, no interrupts
   neorv32_uart0_setup(BAUD_RATE, 0);
@@ -73,7 +91,7 @@ int main(void) {
   neorv32_uart0_printf("\nTRNG FIFO depth: %i\n", neorv32_trng_get_fifo_depth());
   neorv32_uart0_printf("Starting TRNG...\n");
   neorv32_trng_enable();
-  neorv32_cpu_delay_ms(100); // TRNG "warm up"
+  delay_ms(100); // TRNG "warm up"
   neorv32_trng_fifo_clear(); // discard "warm-up" data
 
   while(1) {
@@ -81,8 +99,10 @@ int main(void) {
     // main menu
     neorv32_uart0_printf("\nCommands:\n"
                          " n: Print 8-bit random numbers (abort by pressing any key)\n"
+                         " x: Print random numbers as HEX data (abort by pressing any key)\n"
                          " h: Generate histogram and analyze data\n"
                          " t: Compute average random generation rate\n"
+                         " i: Test TRNG interrupt\n"
                          " 1: Run repetition count test (NIST SP 800-90B)\n"
                          " 2: Run adaptive proportion test (NIST SP 800-90B)\n");
 
@@ -94,11 +114,17 @@ int main(void) {
     if (cmd == 'n') {
       print_random_data();
     }
+    else if (cmd == 'x') {
+      print_hex();
+    }
     else if (cmd == 't') {
       compute_rate();
     }
     else if (cmd == 'h') {
       generate_histogram();
+    }
+    else if (cmd == 'i') {
+      irq_test();
     }
     else if (cmd == '1') {
       repetition_count_test();
@@ -116,20 +142,45 @@ int main(void) {
 
 
 /**********************************************************************//**
+ * Test TRNG interrupt.
+ **************************************************************************/
+void irq_test(void) {
+
+  irq_ack = 0;
+
+  // clear TRNG FIFO
+  neorv32_trng_fifo_clear();
+
+  // enable interrupt
+  neorv32_cpu_csr_set(CSR_MIE, 1 << TRNG_FIRQ_ENABLE);
+
+  // wait for interrupt
+  neorv32_cpu_sleep();
+
+  // disable interrupt
+  neorv32_cpu_csr_clr(CSR_MIE, 1 << TRNG_FIRQ_ENABLE);
+
+  if (irq_ack == 1) {
+    neorv32_uart0_printf("IRQ test successful!\n");
+  }
+  else {
+    neorv32_uart0_printf("IRQ test FAILED!\n");
+  }
+}
+
+
+/**********************************************************************//**
  * Print random numbers until a key is pressed.
  **************************************************************************/
 void print_random_data(void) {
 
   uint32_t num_samples = 0;
-  uint8_t trng_data;
 
   neorv32_trng_fifo_clear();
 
   while(1) {
-    if (neorv32_trng_get(&trng_data)) {
-      continue;
-    }
-    neorv32_uart0_printf("%u ", (uint32_t)(trng_data));
+    while(neorv32_trng_data_avail() == 0);
+    neorv32_uart0_printf("%u ", (uint32_t)neorv32_trng_data_get());
     num_samples++;
     if (neorv32_uart0_char_received()) { // abort when key pressed
       neorv32_uart0_char_received_get(); // discard received char
@@ -137,6 +188,66 @@ void print_random_data(void) {
     }
   }
   neorv32_uart0_printf("\nPrinted samples: %u\n", num_samples);
+}
+
+
+/**********************************************************************//**
+ * Print random numbers as HEX dump.
+ **************************************************************************/
+void print_hex(void) {
+
+  uint8_t tmp;
+  uint8_t line[16];
+  uint32_t i;
+
+  neorv32_trng_fifo_clear();
+
+  while (1) {
+
+    // get 16 bytes
+    for (i=0; i<16; i++) {
+      while (neorv32_trng_data_avail() == 0);
+      line[i] = neorv32_trng_data_get();
+    }
+
+    // print 16 bytes as hexadecimal
+    for (i=0; i<16; i++) {
+      aux_print_hex_byte(line[i]);
+      neorv32_uart0_putc(' ');
+    }
+
+    neorv32_uart0_printf("| ");
+
+    // print 16 bytes as ASCII
+    for (i=0; i<16; i++) {
+      tmp = line[i];
+      if ((tmp < 32) || (tmp > 126)) { // not printable?
+        tmp = '.';
+      }
+      neorv32_uart0_putc((char)tmp);
+    }
+
+    neorv32_uart0_printf("\n");
+
+    if (neorv32_uart0_char_received()) {
+      neorv32_uart0_char_received_get();
+      return;
+    }
+  }
+}
+
+
+/**********************************************************************//**
+ * Print HEX byte.
+ *
+ * @param[in] byte Byte to be printed as 2-char hex value.
+ **************************************************************************/
+void aux_print_hex_byte(uint8_t byte) {
+
+  static const char symbols[] = "0123456789abcdef";
+
+  neorv32_uart0_putc(symbols[(byte >> 4) & 0x0f]);
+  neorv32_uart0_putc(symbols[(byte >> 0) & 0x0f]);
 }
 
 
@@ -155,10 +266,12 @@ void repetition_count_test(void) {
 
   neorv32_trng_fifo_clear();
 
-  while (neorv32_trng_get(&a));
+  while (neorv32_trng_data_avail() == 0);
+  a = neorv32_trng_data_get();
   b = 1;
   while (1) {
-    while (neorv32_trng_get(&x));
+    while (neorv32_trng_data_avail() == 0);
+    x = neorv32_trng_data_get();
 
     if (x == a) {
       b++;
@@ -207,10 +320,12 @@ void adaptive_proportion_test(void) {
   neorv32_trng_fifo_clear();
 
   while (1) {
-    while (neorv32_trng_get(&a));
+    while (neorv32_trng_data_avail() == 0);
+    a = neorv32_trng_data_get();
     b = 1;
     for (i=1; i<w; i++) {
-      while(neorv32_trng_get(&x));
+      while (neorv32_trng_data_avail() == 0);
+      x = neorv32_trng_data_get();
       if (a == x) {
         b++;
       }
@@ -265,9 +380,8 @@ void generate_histogram(void) {
   while (1) {
 
     // get raw TRNG data
-    if (neorv32_trng_get(&trng_data)) {
-      continue;
-    }
+    while (neorv32_trng_data_avail() == 0);
+    trng_data = neorv32_trng_data_get();
 
     // add to histogram
     hist[trng_data & 0xff]++;
@@ -347,13 +461,13 @@ void compute_rate(void) {
 
   const uint32_t n_samples = 16*1024;
   uint32_t i;
-  uint8_t data;
 
   uint32_t cycles = neorv32_cpu_csr_read(CSR_CYCLE);
 
   i = 0;
   while (i<n_samples) {
-    if (neorv32_trng_get(&data)) { // data available?
+    if (neorv32_trng_data_avail()) { // data available?
+      neorv32_trng_data_get(); // discard data
       i++;
     }
   }
@@ -362,7 +476,7 @@ void compute_rate(void) {
   uint32_t cycles_per_rnd = delta / n_samples;
   uint32_t rnd_per_sec = neorv32_sysinfo_get_clk() / cycles_per_rnd;
 
-  neorv32_uart0_printf("\nAverage random generation rate\n");
+  neorv32_uart0_printf("Average random generation rate\n");
   neorv32_uart0_printf("Cycles per random byte: ~%u\n", cycles_per_rnd);
-  neorv32_uart0_printf("Throughput (bytes/s):   ~%u\n", rnd_per_sec);
+  neorv32_uart0_printf("Throughput (kB/s):      ~%u\n", rnd_per_sec/1024);
 }

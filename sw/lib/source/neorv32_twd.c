@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -9,10 +9,6 @@
 /**
  * @file neorv32_twd.c
  * @brief Two-Wire Device Controller (TWD) HW driver source file.
- *
- * @note These functions should only be used if the TWD unit was synthesized (IO_TWD_EN = true).
- *
- * @see https://stnolting.github.io/neorv32/sw/files.html
  */
 
 #include <neorv32.h>
@@ -21,16 +17,11 @@
 /**********************************************************************//**
  * Check if TWD unit was synthesized.
  *
- * @return 0 if TWD was not synthesized, 1 if TWD is available.
+ * @return 0 if TWD was not synthesized, non-zero if TWD is available.
  **************************************************************************/
 int neorv32_twd_available(void) {
 
-  if (NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_TWD)) {
-    return 1;
-  }
-  else {
-    return 0;
-  }
+  return (int)(NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_TWD));
 }
 
 
@@ -39,33 +30,44 @@ int neorv32_twd_available(void) {
  *
  * @param[in] device_addr 7-bit device address.
  * @param[in] fsel Bus sample clock / filter select.
- * @param[in] irq_rx_avail IRQ if RX FIFO data available.
- * @param[in] irq_rx_full IRQ if RX FIFO full.
- * @param[in] irq_tx_empty IRQ if TX FIFO empty.
+ * @param[in] irq_mask Interrupt configuration bit mask (CTRL's irq_* bits).
  **************************************************************************/
-void neorv32_twd_setup(int device_addr, int fsel, int irq_rx_avail, int irq_rx_full, int irq_tx_empty) {
+void neorv32_twd_setup(int device_addr, int fsel, uint32_t irq_mask) {
 
   NEORV32_TWD->CTRL = 0; // reset
 
-  uint32_t ctrl = 0;
+  const uint32_t mask = (1 << TWD_CTRL_IRQ_RX_AVAIL) |
+                        (1 << TWD_CTRL_IRQ_RX_FULL)  |
+                        (1 << TWD_CTRL_IRQ_TX_EMPTY);
+
+  uint32_t ctrl = irq_mask & mask;
   ctrl |= ((uint32_t)(               0x01) << TWD_CTRL_EN);
   ctrl |= ((uint32_t)(device_addr  & 0x7f) << TWD_CTRL_DEV_ADDR0);
   ctrl |= ((uint32_t)(fsel         & 0x01) << TWD_CTRL_FSEL);
-  ctrl |= ((uint32_t)(irq_rx_avail & 0x01) << TWD_CTRL_IRQ_RX_AVAIL);
-  ctrl |= ((uint32_t)(irq_rx_full  & 0x01) << TWD_CTRL_IRQ_RX_FULL);
-  ctrl |= ((uint32_t)(irq_tx_empty & 0x01) << TWD_CTRL_IRQ_TX_EMPTY);
   NEORV32_TWD->CTRL = ctrl;
 }
 
 
 /**********************************************************************//**
- * Get TWD FIFO depth.
+ * Get TWD RX FIFO depth.
  *
- * @return FIFO depth (number of entries), zero if no FIFO implemented
+ * @return RX FIFO depth (number of entries), zero if no RX FIFO implemented
  **************************************************************************/
-int neorv32_twd_get_fifo_depth(void) {
+int neorv32_twd_get_rx_fifo_depth(void) {
 
-  uint32_t tmp = (NEORV32_TWD->CTRL >> TWD_CTRL_FIFO_LSB) & 0xf;
+  uint32_t tmp = (NEORV32_TWD->CTRL >> TWD_CTRL_RX_FIFO_LSB) & 0xf;
+  return (int)(1 << tmp);
+}
+
+
+/**********************************************************************//**
+ * Get TWD TX FIFO depth.
+ *
+ * @return TX FIFO depth (number of entries), zero if no TX FIFO implemented
+ **************************************************************************/
+int neorv32_twd_get_tx_fifo_depth(void) {
+
+  uint32_t tmp = (NEORV32_TWD->CTRL >> TWD_CTRL_TX_FIFO_LSB) & 0xf;
   return (int)(1 << tmp);
 }
 
@@ -241,4 +243,18 @@ void neorv32_twd_put(uint8_t data) {
 uint8_t neorv32_twd_get(void) {
 
   return NEORV32_TWD->DATA;
+}
+
+
+/**********************************************************************//**
+ * Clear TX FIFO, put data byte into TX FIFO to get stored into dummy TX buffer.
+ *
+ * @warning This function expects enabled dummy byte.
+ *
+ * @param[in] data Data byte to be stored in TX FIFO/dummy.
+ **************************************************************************/
+void neorv32_twd_set_tx_dummy(uint8_t data) {
+
+  neorv32_twd_clear_tx();
+  neorv32_twd_put(data);
 }

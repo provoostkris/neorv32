@@ -8,17 +8,13 @@
 -- -------------------------------------------------------------------------------- --
 -- The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              --
 -- Copyright (c) NEORV32 contributors.                                              --
--- Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  --
+-- Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  --
 -- Licensed under the BSD-3-Clause license, see LICENSE for details.                --
 -- SPDX-License-Identifier: BSD-3-Clause                                            --
 -- ================================================================================ --
 
 library ieee;
 use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
-
-library neorv32;
-use neorv32.neorv32_package.all;
 
 entity neorv32_debug_auth is
   port (
@@ -26,8 +22,8 @@ entity neorv32_debug_auth is
     clk_i    : in  std_ulogic; -- global clock
     rstn_i   : in  std_ulogic; -- global reset, low-active, asynchronous
     -- register interface --
-    we_i     : in  std_ulogic; -- write data when high
-    re_i     : in  std_ulogic; -- read data has been consumed by the debugger when high
+    we_i     : in  std_ulogic; -- wdata_i valid when high
+    re_i     : in  std_ulogic; -- rdata_o has been consumed by the debugger when high
     wdata_i  : in  std_ulogic_vector(31 downto 0); -- write data (from debugger)
     rdata_o  : out std_ulogic_vector(31 downto 0); -- read data (to debugger)
     -- status --
@@ -50,7 +46,7 @@ begin
 
   -- Exemplary Authentication Mechanism -----------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  dm_controller: process(rstn_i, clk_i)
+  auth_ctrl: process(rstn_i, clk_i)
   begin
     if (rstn_i = '0') then
       authenticated_q <= '0';
@@ -58,10 +54,10 @@ begin
       if (enable_i = '0') then
         authenticated_q <= '0'; -- clear authentication when disabled
       elsif (we_i = '1') then
-        authenticated_q <= wdata_i(0); -- just write a "1" to authenticate
+        authenticated_q <= wdata_i(0); -- just write 1 to authenticate
       end if;
     end if;
-  end process dm_controller;
+  end process auth_ctrl;
 
   -- authenticator busy --
   busy_o <= '0'; -- this simple authenticator is always ready

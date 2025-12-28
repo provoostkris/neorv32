@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -15,14 +15,8 @@
 #include <neorv32.h>
 #include <string.h>
 
-
-/**********************************************************************//**
- * @name User configuration
- **************************************************************************/
-/**@{*/
-/** UART BAUD rate */
+// UART BAUD rate
 #define BAUD_RATE 19200
-/**@}*/
 
 // Prototypes
 void slink_firq_handler(void);
@@ -32,12 +26,13 @@ void slink_firq_handler(void);
  * Simple SLINK demo program.
  *
  * @note This program requires the UART0 and the SLINK to be synthesized.
+ * This program assumes a direct loop-back: TX-link -> RX-link.
  *
  * @return =! 0 if execution failed.
  **************************************************************************/
 int main() {
 
-  int i, slink_rc;
+  int i;
   uint32_t slink_data;
 
 
@@ -46,11 +41,6 @@ int main() {
 
   // setup UART at default baud rate, no interrupts
   neorv32_uart0_setup(BAUD_RATE, 0);
-
-  // check if UART0 unit is implemented at all
-  if (neorv32_uart0_available() == 0) {
-    return -1; // abort if not implemented
-  }
 
 
   // intro
@@ -71,7 +61,7 @@ int main() {
 
 
   // setup SLINK module, no interrupts
-  neorv32_slink_setup(0, 0);
+  neorv32_slink_setup(0);
 
 
   // TX demo
@@ -81,8 +71,7 @@ int main() {
     slink_data = neorv32_aux_xorshift32();
     neorv32_uart0_printf("[%i] Sending 0x%x... ", i, slink_data);
 
-    slink_rc = neorv32_slink_tx_status();
-    if (slink_rc == SLINK_FIFO_FULL) {
+    if (neorv32_slink_tx_full()) {
       neorv32_uart0_printf("ERROR! TX FIFO full!\n");
       break;
     }
@@ -105,8 +94,7 @@ int main() {
   for (i=0; i<(rx_depth+tx_depth+1); i++) {
     neorv32_uart0_printf("[%i] Reading RX data... ", i);
 
-    slink_rc = neorv32_slink_rx_status();
-    if (slink_rc == SLINK_FIFO_EMPTY) {
+    if (neorv32_slink_rx_empty()) {
       neorv32_uart0_printf("ERROR! RX FIFO empty!\n");
       break;
     }
@@ -124,21 +112,18 @@ int main() {
   neorv32_uart0_printf("\n------ RX IRQ Demo -------\n");
 
   // reconfigure SLINK module
-  neorv32_slink_setup(1 << SLINK_CTRL_IRQ_RX_NEMPTY, 0); // interrupt if RX data available
-  neorv32_slink_rx_clear();
-  neorv32_slink_tx_clear();
+  neorv32_slink_setup(1 << SLINK_CTRL_IRQ_RX_NEMPTY); // interrupt if RX data available
 
   // NEORV32 runtime environment: install SLINK FIRQ handler
-  neorv32_rte_handler_install(SLINK_RX_RTE_ID, slink_firq_handler);
-  neorv32_cpu_csr_set(CSR_MIE, 1 << SLINK_RX_FIRQ_ENABLE); // enable SLINK FIRQ
+  neorv32_rte_handler_install(SLINK_TRAP_CODE, slink_firq_handler);
+  neorv32_cpu_csr_set(CSR_MIE, 1 << SLINK_FIRQ_ENABLE); // enable SLINK FIRQ
   neorv32_cpu_csr_set(CSR_MSTATUS, 1 << CSR_MSTATUS_MIE); // enable machine-mode interrupts
 
   for (i=0; i<4; i++) {
     slink_data = neorv32_aux_xorshift32();
     neorv32_uart0_printf("[%i] Sending 0x%x... ", i, slink_data);
 
-    slink_rc = neorv32_slink_tx_status();
-    if (slink_rc == SLINK_FIFO_FULL) {
+    if (neorv32_slink_tx_full()) {
       neorv32_uart0_printf("FAILED! TX FIFO full!\n");
       break;
     }

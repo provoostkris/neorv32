@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -9,10 +9,6 @@
 /**
  * @file neorv32_trng.c
  * @brief True Random Number Generator (TRNG) HW driver source file.
- *
- * @note These functions should only be used if the TRNG unit was synthesized (IO_TRNG_EN = true).
- *
- * @see https://stnolting.github.io/neorv32/sw/files.html
  */
 
 #include <neorv32.h>
@@ -21,29 +17,24 @@
 /**********************************************************************//**
  * Check if TRNG unit was synthesized.
  *
- * @return 0 if TRNG was not synthesized, 1 if TRNG is available.
+ * @return 0 if TRNG was not synthesized, non-zero if TRNG is available.
  **************************************************************************/
 int neorv32_trng_available(void) {
 
-  if (NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_TRNG)) {
-    return 1;
-  }
-  else {
-    return 0;
-  }
+  return (int)(NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_TRNG));
 }
 
 
 /**********************************************************************//**
- * Reset, configure and enable TRNG.
+ * Reset and enable TRNG.
  **************************************************************************/
 void neorv32_trng_enable(void) {
 
   NEORV32_TRNG->CTRL = 0; // disable and reset
 
   // wait for all internal components to reset
-  int i;
-  for (i=0; i<256; i++) {
+  int i = 0;
+  for (i=0; i<64; i++) {
     asm volatile ("nop");
   }
 
@@ -82,20 +73,25 @@ int neorv32_trng_get_fifo_depth(void) {
 
 
 /**********************************************************************//**
- * Get random data byte from TRNG.
+ * Check if at least one byte of random is available.
  *
- * @param[in,out] data uint8_t pointer for storing random data byte. Will be set to zero if no valid data available.
- * @return Data is valid when 0 and invalid otherwise.
+ * @return 0 if no data available, non-zero if at least one byte is available.
  **************************************************************************/
-int neorv32_trng_get(uint8_t *data) {
+int neorv32_trng_data_avail(void) {
 
-  if (NEORV32_TRNG->CTRL & (1<<TRNG_CTRL_AVAIL)) { // random data available?
-    *data = (uint8_t)NEORV32_TRNG->DATA;
-    return 0;
-  }
-  else {
-    return -1;
-  }
+  return (int)(NEORV32_TRNG->CTRL & (1<<TRNG_CTRL_AVAIL));
+}
+
+
+/**********************************************************************//**
+ * Get random data byte from TRNG (non-blocking).
+ * Check before if data is available using neorv32_trng_data_avail().
+ *
+ * @return Random data byte.
+ **************************************************************************/
+uint8_t neorv32_trng_data_get(void) {
+
+  return (uint8_t)NEORV32_TRNG->DATA;
 }
 
 
@@ -108,10 +104,5 @@ int neorv32_trng_get(uint8_t *data) {
  **************************************************************************/
 int neorv32_trng_check_sim_mode(void) {
 
-  if (NEORV32_TRNG->CTRL & (1<<TRNG_CTRL_SIM_MODE)) {
-    return -1; // simulation mode (PRNG)
-  }
-  else {
-    return 0; // real TRUE random number generator mode
-  }
+  return (int)(NEORV32_TRNG->CTRL & (1<<TRNG_CTRL_SIM_MODE));
 }

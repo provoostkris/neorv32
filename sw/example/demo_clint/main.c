@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -42,15 +42,19 @@ int main() {
   // setup UART at default baud rate, no interrupts
   neorv32_uart0_setup(BAUD_RATE, 0);
 
-
   // check if CLINT unit is implemented at all
   if (neorv32_clint_available() == 0) {
-    neorv32_uart0_puts("ERROR! CLINT not implemented!\n");
+    neorv32_uart0_puts("[ERROR] CLINT not implemented!\n");
+    return 1;
+  }
+  // check if GPIO module is implemented at all
+  if (neorv32_gpio_available() == 0) {
+    neorv32_uart0_puts("[ERROR] GPIO module not implemented!\n");
     return 1;
   }
 
   // Intro
-  neorv32_uart0_puts("RISC-V Core Local Interruptor (CLINT) demo Program.\n"
+  neorv32_uart0_puts("RISC-V Core-Local Interruptor (CLINT) demo Program.\n"
                      "Real-time clock using the RISC-V MTIMER interrupt.\n"
                      "Also toggles GPIO.output(0) at 1Hz.\n\n");
 
@@ -59,22 +63,22 @@ int main() {
 
   // setup date and time for the Unix time of CLINT.MTIMER
   date_t date;
-  date.year    = 2024; // current year (absolute)
-  date.month   = 12;   // 1..12
-  date.day     = 26;   // 1..31
-  date.hours   = 21;   // 0..23
-  date.minutes = 18;   // 0..59
-  date.seconds = 36;   // 0..59
+  date.year    = 2025; // current year (absolute)
+  date.month   = 10;   // 1..12
+  date.day     = 24;   // 1..31
+  date.hours   = 23;   // 0..23
+  date.minutes = 01;   // 0..59
+  date.seconds = 17;   // 0..59
 
   neorv32_clint_unixtime_set(neorv32_aux_date2unixtime(&date));
-  neorv32_uart0_printf("Unix timestamp: %u\n", (uint32_t)neorv32_clint_unixtime_get);
+  neorv32_uart0_printf("Unix timestamp: %u\n", (uint32_t)neorv32_clint_unixtime_get());
 
   // configure MTIME timer to not trigger
   neorv32_clint_mtimecmp_set(-1);
 
   // install CLINT handlers to RTE
-  neorv32_rte_handler_install(RTE_TRAP_MTI, mti_irq_handler);
-  neorv32_rte_handler_install(RTE_TRAP_MSI, msi_irq_handler);
+  neorv32_rte_handler_install(TRAP_CODE_MTI, mti_irq_handler);
+  neorv32_rte_handler_install(TRAP_CODE_MSI, msi_irq_handler);
 
   // start real time clock
   neorv32_uart0_printf("\nStarting real-time clock demo...\n");
@@ -85,7 +89,6 @@ int main() {
   // enable machine time and software interrupts
   neorv32_cpu_csr_set(CSR_MIE, (1 << CSR_MIE_MTIE) + (1 << CSR_MIE_MSIE));
   neorv32_cpu_csr_set(CSR_MSTATUS, 1 << CSR_MSTATUS_MIE);
-
 
   // go to sleep mode and wait for interrupt
   while(1) {
@@ -103,7 +106,7 @@ int main() {
  **************************************************************************/
 void mti_irq_handler(void) {
 
-  // configure MTIME timer's next interrupt to trigger after 1 second starting from now
+  // configure MTIME timer's next interrupt to trigger after 1 second MTIMECMP delta
   neorv32_clint_mtimecmp_set(neorv32_clint_mtimecmp_get() + neorv32_sysinfo_get_clk());
 
   // toggle output port bit 0

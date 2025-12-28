@@ -3,7 +3,7 @@
 -- -------------------------------------------------------------------------------- --
 -- The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              --
 -- Copyright (c) NEORV32 contributors.                                              --
--- Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  --
+-- Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  --
 -- Licensed under the BSD-3-Clause license, see LICENSE for details.                --
 -- SPDX-License-Identifier: BSD-3-Clause                                            --
 -- ================================================================================ --
@@ -18,103 +18,108 @@ use neorv32.neorv32_package.all;
 entity neorv32_cpu_alu is
   generic (
     -- RISC-V CPU Extensions --
-    RISCV_ISA_M      : boolean; -- implement mul/div extension
-    RISCV_ISA_Zba    : boolean; -- implement address-generation instruction
-    RISCV_ISA_Zbb    : boolean; -- implement basic bit-manipulation instruction
-    RISCV_ISA_Zbkb   : boolean; -- implement bit-manipulation instructions for cryptography
-    RISCV_ISA_Zbkc   : boolean; -- implement carry-less multiplication instructions
-    RISCV_ISA_Zbkx   : boolean; -- implement cryptography crossbar permutation extension
-    RISCV_ISA_Zbs    : boolean; -- implement single-bit instructions
-    RISCV_ISA_Zfinx  : boolean; -- implement 32-bit floating-point extension
-    RISCV_ISA_Zicond : boolean; -- implement integer conditional operations
-    RISCV_ISA_Zknd   : boolean; -- implement cryptography NIST AES decryption extension
-    RISCV_ISA_Zkne   : boolean; -- implement cryptography NIST AES encryption extension
-    RISCV_ISA_Zknh   : boolean; -- implement cryptography NIST hash extension
-    RISCV_ISA_Zksed  : boolean; -- implement ShangMi block cypher extension
-    RISCV_ISA_Zksh   : boolean; -- implement ShangMi hash extension
-    RISCV_ISA_Zmmul  : boolean; -- implement multiply-only M sub-extension
-    RISCV_ISA_Zxcfu  : boolean; -- implement custom (instr.) functions unit
+    RISCV_ISA_M      : boolean; -- mul/div extension
+    RISCV_ISA_Zba    : boolean; -- address-generation instruction
+    RISCV_ISA_Zbb    : boolean; -- basic bit-manipulation instruction
+    RISCV_ISA_Zbkb   : boolean; -- bit-manipulation instructions for cryptography
+    RISCV_ISA_Zbkc   : boolean; -- carry-less multiplication instructions
+    RISCV_ISA_Zbkx   : boolean; -- cryptography crossbar permutation extension
+    RISCV_ISA_Zbs    : boolean; -- single-bit instructions
+    RISCV_ISA_Zfinx  : boolean; -- 32-bit floating-point extension
+    RISCV_ISA_Zibi   : boolean; -- branch with immediate
+    RISCV_ISA_Zicond : boolean; -- integer conditional operations
+    RISCV_ISA_Zknd   : boolean; -- cryptography NIST AES decryption extension
+    RISCV_ISA_Zkne   : boolean; -- cryptography NIST AES encryption extension
+    RISCV_ISA_Zknh   : boolean; -- cryptography NIST hash extension
+    RISCV_ISA_Zksed  : boolean; -- ShangMi block cipher extension
+    RISCV_ISA_Zksh   : boolean; -- ShangMi hash extension
+    RISCV_ISA_Zmmul  : boolean; -- multiply-only M sub-extension
+    RISCV_ISA_Zxcfu  : boolean; -- custom (instr.) functions unit
     -- Tuning Options --
     FAST_MUL_EN      : boolean; -- use DSPs for M extension's multiplier
     FAST_SHIFT_EN    : boolean  -- use barrel shifter for shift operations
   );
   port (
     -- global control --
-    clk_i       : in  std_ulogic; -- global clock, rising edge
-    rstn_i      : in  std_ulogic; -- global reset, low-active, async
-    ctrl_i      : in  ctrl_bus_t; -- main control bus
-    -- CSR interface --
-    csr_we_i    : in  std_ulogic; -- global write enable
-    csr_addr_i  : in  std_ulogic_vector(11 downto 0); -- address
-    csr_wdata_i : in  std_ulogic_vector(XLEN-1 downto 0); -- write data
-    csr_rdata_o : out std_ulogic_vector(XLEN-1 downto 0); -- read data
+    clk_i  : in  std_ulogic; -- global clock, rising edge
+    rstn_i : in  std_ulogic; -- global reset, low-active, async
+    ctrl_i : in  ctrl_bus_t; -- main control bus
     -- data input --
-    rs1_i       : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 1
-    rs2_i       : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 2
-    rs3_i       : in  std_ulogic_vector(XLEN-1 downto 0); -- rf source 3
-    pc_i        : in  std_ulogic_vector(XLEN-1 downto 0); -- current PC
-    imm_i       : in  std_ulogic_vector(XLEN-1 downto 0); -- immediate
+    rs1_i  : in  std_ulogic_vector(31 downto 0); -- rf source 1
+    rs2_i  : in  std_ulogic_vector(31 downto 0); -- rf source 2
     -- data output --
-    cmp_o       : out std_ulogic_vector(1 downto 0); -- comparator status
-    res_o       : out std_ulogic_vector(XLEN-1 downto 0); -- ALU result
-    add_o       : out std_ulogic_vector(XLEN-1 downto 0); -- address computation result
+    cmp_o  : out std_ulogic_vector(1 downto 0);  -- comparator status
+    res_o  : out std_ulogic_vector(31 downto 0); -- ALU result
+    add_o  : out std_ulogic_vector(31 downto 0); -- address computation result
+    csr_o  : out std_ulogic_vector(31 downto 0); -- CSR read data
     -- status --
-    cp_done_o   : out std_ulogic  -- co-processor operation done?
+    done_o : out std_ulogic -- co-processor operation done?
   );
 end neorv32_cpu_alu;
 
 architecture neorv32_cpu_alu_rtl of neorv32_cpu_alu is
 
+  -- Zibi ISA extension: compare with immediate --
+  function zibi_cmp_f(sel : std_ulogic_vector(4 downto 0); cmp : std_ulogic_vector) return std_ulogic is
+    variable imm_v : std_ulogic_vector(cmp'length-1 downto 0);
+  begin
+    -- immediate selection --
+    if (sel = "00000") then
+      imm_v := (others => '1');
+    else
+      imm_v := (others => '0');
+      imm_v(4 downto 0) := sel;
+    end if;
+    -- equal? --
+    if (imm_v = cmp) then
+      return '1';
+    else
+      return '0';
+    end if;
+  end function zibi_cmp_f;
+
   -- comparator --
-  signal cmp_rs1 : std_ulogic_vector(XLEN downto 0);
-  signal cmp_rs2 : std_ulogic_vector(XLEN downto 0);
-  signal cmp     : std_ulogic_vector(1 downto 0); -- comparator status
+  signal cmp_rs1, cmp_rs2 : std_ulogic_vector(32 downto 0);
+  signal cmp_eq,  cmp_ls  : std_ulogic;
 
   -- operands --
-  signal opa,   opb   : std_ulogic_vector(XLEN-1 downto 0);
-  signal opa_x, opb_x : std_ulogic_vector(XLEN downto 0);
+  signal opa,   opb   : std_ulogic_vector(31 downto 0);
+  signal opa_x, opb_x : std_ulogic_vector(32 downto 0);
 
   -- intermediate results --
-  signal addsub_res : std_ulogic_vector(XLEN downto 0);
-  signal cp_res     : std_ulogic_vector(XLEN-1 downto 0);
+  signal addsub_res : std_ulogic_vector(32 downto 0);
+  signal cp_res     : std_ulogic_vector(31 downto 0);
 
   -- co-processor interface --
-  type cp_data_t  is array (0 to 6) of std_ulogic_vector(XLEN-1 downto 0);
-  signal cp_result : cp_data_t; -- co-processor result
-  signal cp_valid  : std_ulogic_vector(6 downto 0); -- co-processor done
-  signal cp_shamt  : std_ulogic_vector(index_size_f(XLEN)-1 downto 0); -- shift amount
+  type cp_data_t  is array (0 to 6) of std_ulogic_vector(31 downto 0);
+  signal cp_result : cp_data_t;
+  signal cp_valid  : std_ulogic_vector(6 downto 0);
 
-  -- CSR proxy --
-  signal fpu_csr_en, cfu_csr_en : std_ulogic;
-  signal fpu_csr_we, cfu_csr_we : std_ulogic;
-  signal fpu_csr_rd, cfu_csr_rd : std_ulogic_vector(XLEN-1 downto 0);
-
-  -- CFU proxy --
-  signal cfu_active, cfu_done, cfu_busy : std_ulogic;
-  signal cfu_res : std_ulogic_vector(XLEN-1 downto 0);
-
-  -- CSR read-backs --
-  signal csr_rdata_fpu, csr_rdata_cfu : std_ulogic_vector(XLEN-1 downto 0);
+  -- proxy logic --
+  signal fpu_csr_en, fpu_csr_we, cfu_done, cfu_busy : std_ulogic;
+  signal fpu_csr_rd, cfu_res : std_ulogic_vector(31 downto 0);
 
 begin
 
-  -- Comparator Unit (for conditional branches) ---------------------------------------------
+  -- Comparator Unit ------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   cmp_rs1 <= (rs1_i(rs1_i'left) and (not ctrl_i.alu_unsigned)) & rs1_i; -- sign-extend
   cmp_rs2 <= (rs2_i(rs2_i'left) and (not ctrl_i.alu_unsigned)) & rs2_i; -- sign-extend
 
-  cmp(cmp_equal_c) <= '1' when (rs1_i = rs2_i) else '0';
-  cmp(cmp_less_c)  <= '1' when (signed(cmp_rs1) < signed(cmp_rs2)) else '0'; -- signed or unsigned comparison
-  cmp_o            <= cmp;
+  cmp_eq <= '1' when (rs1_i = rs2_i) else '0';
+  cmp_ls <= '1' when (signed(cmp_rs1) < signed(cmp_rs2)) else '0'; -- signed or unsigned comparison
+
+  cmp_o(cmp_equal_c) <= zibi_cmp_f(ctrl_i.rf_rs2, rs1_i) when (ctrl_i.ir_funct3(2 downto 1) = "01") and RISCV_ISA_Zibi else cmp_eq;
+  cmp_o(cmp_less_c)  <= cmp_ls;
 
 
   -- ALU Input Operand Select ---------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
-  opa <= pc_i  when (ctrl_i.alu_opa_mux = '1') else rs1_i;
-  opb <= imm_i when (ctrl_i.alu_opb_mux = '1') else rs2_i;
+  opa <= ctrl_i.pc_cur  when (ctrl_i.alu_opa_mux = '1') else rs1_i;
+  opb <= ctrl_i.alu_imm when (ctrl_i.alu_opb_mux = '1') else rs2_i;
 
 
-  -- Adder/Subtracter Core ------------------------------------------------------------------
+  -- Adder/Subtractor Core ------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   opa_x <= (opa(opa'left) and (not ctrl_i.alu_unsigned)) & opa; -- sign-extend
   opb_x <= (opb(opb'left) and (not ctrl_i.alu_unsigned)) & opb; -- sign-extend
@@ -122,7 +127,7 @@ begin
   addsub_res <= std_ulogic_vector(unsigned(opa_x) - unsigned(opb_x)) when (ctrl_i.alu_sub = '1') else
                 std_ulogic_vector(unsigned(opa_x) + unsigned(opb_x));
 
-  add_o <= addsub_res(XLEN-1 downto 0); -- direct output
+  add_o <= addsub_res(31 downto 0); -- direct output
 
 
   -- ALU Operation Select -------------------------------------------------------------------
@@ -132,7 +137,7 @@ begin
     res_o <= (others => '0');
     case ctrl_i.alu_op is
       when alu_op_zero_c => res_o <= (others => '0');
-      when alu_op_add_c  => res_o <= addsub_res(XLEN-1 downto 0);
+      when alu_op_add_c  => res_o <= addsub_res(31 downto 0);
       when alu_op_cp_c   => res_o <= cp_res;
       when alu_op_slt_c  => res_o(0) <= addsub_res(addsub_res'left); -- carry/borrow
       when alu_op_movb_c => res_o <= opb;
@@ -150,18 +155,11 @@ begin
 
   -- multi-cycle co-processor operation done? --
   -- > "cp_valid" signal has to be set (for one cycle) one cycle before CP output data (cp_result) is valid
-  cp_done_o <= cp_valid(0) or cp_valid(1) or cp_valid(2) or cp_valid(3) or cp_valid(4) or cp_valid(5) or cp_valid(6);
+  done_o <= cp_valid(0) or cp_valid(1) or cp_valid(2) or cp_valid(3) or cp_valid(4) or cp_valid(5) or cp_valid(6);
 
   -- co-processor result --
   -- > "cp_result" data has to be always zero unless the specific co-processor has been actually triggered
   cp_res <= cp_result(0) or cp_result(1) or cp_result(2) or cp_result(3) or cp_result(4) or cp_result(5) or cp_result(6);
-
-  -- co-processor CSR read-back --
-  -- > "csr_rdata_*" data has to be always zero unless the specific co-processor is actually being accessed
-  csr_rdata_o <= csr_rdata_fpu or csr_rdata_cfu;
-
-  -- shift amount --
-  cp_shamt <= opb(index_size_f(XLEN)-1 downto 0);
 
 
   -- ALU[I]-Opcode Co-Processor: Shifter Unit (Base ISA) ------------------------------------
@@ -172,15 +170,15 @@ begin
   )
   port map (
     -- global control --
-    clk_i   => clk_i,        -- global clock, rising edge
-    rstn_i  => rstn_i,       -- global reset, low-active, async
-    ctrl_i  => ctrl_i,       -- main control bus
+    clk_i   => clk_i,           -- global clock, rising edge
+    rstn_i  => rstn_i,          -- global reset, low-active, async
+    ctrl_i  => ctrl_i,          -- main control bus
     -- data input --
-    rs1_i   => rs1_i,        -- rf source 1
-    shamt_i => cp_shamt,     -- shift amount
+    rs1_i   => rs1_i,           -- rf source 1
+    shamt_i => opb(4 downto 0), -- shift amount
     -- result and status --
-    res_o   => cp_result(0), -- operation result
-    valid_o => cp_valid(0)   -- data output valid
+    res_o   => cp_result(0),    -- operation result
+    valid_o => cp_valid(0)      -- data output valid
   );
 
 
@@ -225,21 +223,22 @@ begin
       EN_ZBB        => RISCV_ISA_Zbb,  -- enable basic bit-manipulation instruction
       EN_ZBKB       => RISCV_ISA_Zbkb, -- enable bit-manipulation instructions for cryptography
       EN_ZBKC       => RISCV_ISA_Zbkc, -- enable carry-less multiplication instructions
+      EN_ZBKX       => RISCV_ISA_Zbkx, -- crossbar permutation instructions for cryptography
       EN_ZBS        => RISCV_ISA_Zbs   -- enable single-bit instructions
     )
     port map (
       -- global control --
-      clk_i   => clk_i,        -- global clock, rising edge
-      rstn_i  => rstn_i,       -- global reset, low-active, async
-      ctrl_i  => ctrl_i,       -- main control bus
+      clk_i   => clk_i,           -- global clock, rising edge
+      rstn_i  => rstn_i,          -- global reset, low-active, async
+      ctrl_i  => ctrl_i,          -- main control bus
       -- data input --
-      cmp_i   => cmp,          -- comparator status
-      rs1_i   => rs1_i,        -- rf source 1
-      rs2_i   => rs2_i,        -- rf source 2
-      shamt_i => cp_shamt,     -- shift amount
+      less_i  => cmp_ls,          -- compare less
+      rs1_i   => rs1_i,           -- rf source 1
+      rs2_i   => rs2_i,           -- rf source 2
+      shamt_i => opb(4 downto 0), -- shift amount
       -- result and status --
-      res_o   => cp_result(2), -- operation result
-      valid_o => cp_valid(2)   -- data output valid
+      res_o   => cp_result(2),    -- operation result
+      valid_o => cp_valid(2)      -- data output valid
     );
   end generate;
 
@@ -257,37 +256,38 @@ begin
     neorv32_cpu_cp_fpu_inst: entity neorv32.neorv32_cpu_cp_fpu
     port map (
       -- global control --
-      clk_i       => clk_i,                  -- global clock, rising edge
-      rstn_i      => rstn_i,                 -- global reset, low-active, async
-      ctrl_i      => ctrl_i,                 -- main control bus
+      clk_i       => clk_i,                       -- global clock, rising edge
+      rstn_i      => rstn_i,                      -- global reset, low-active, async
+      ctrl_i      => ctrl_i,                      -- main control bus
       -- CSR interface --
-      csr_we_i    => fpu_csr_we,             -- write enable
-      csr_addr_i  => csr_addr_i(1 downto 0), -- address
-      csr_wdata_i => csr_wdata_i,            -- write data
-      csr_rdata_o => fpu_csr_rd,             -- read data
+      csr_we_i    => fpu_csr_we,                  -- write enable
+      csr_addr_i  => ctrl_i.csr_addr(1 downto 0), -- address
+      csr_wdata_i => ctrl_i.csr_wdata,            -- write data
+      csr_rdata_o => fpu_csr_rd,                  -- read data
       -- data input --
-      cmp_i       => cmp,                    -- comparator status
-      rs1_i       => rs1_i,                  -- rf source 1
-      rs2_i       => rs2_i,                  -- rf source 2
-      rs3_i       => rs3_i,                  -- rf source 3
+      equal_i     => cmp_eq,                      -- compare equal
+      less_i      => cmp_ls,                      -- compare less
+      rs1_i       => rs1_i,                       -- rf source 1
+      rs2_i       => rs2_i,                       -- rf source 2
       -- result and status --
-      res_o       => cp_result(3),           -- operation result
-      valid_o     => cp_valid(3)             -- data output valid
+      res_o       => cp_result(3),                -- operation result
+      valid_o     => cp_valid(3)                  -- data output valid
     );
 
     -- CSR proxy --
-    fpu_csr_en    <= '1' when (csr_addr_i(11 downto 2) = csr_fflags_c(11 downto 2)) else '0';
-    fpu_csr_we    <= fpu_csr_en and csr_we_i;
-    csr_rdata_fpu <= fpu_csr_rd when (fpu_csr_en = '1') else (others => '0');
+    fpu_csr_en <= '1' when (ctrl_i.csr_addr(11 downto 2) = csr_fflags_c(11 downto 2)) else '0';
+    fpu_csr_we <= fpu_csr_en and ctrl_i.csr_we;
+    csr_o      <= fpu_csr_rd when (fpu_csr_en = '1') else (others => '0');
   end generate;
 
   neorv32_cpu_cp_fpu_inst_false:
   if not RISCV_ISA_Zfinx generate
-    fpu_csr_en    <= '0';
-    fpu_csr_we    <= '0';
-    csr_rdata_fpu <= (others => '0');
-    cp_result(3)  <= (others => '0');
-    cp_valid(3)   <= '0';
+    fpu_csr_en   <= '0';
+    fpu_csr_we   <= '0';
+    fpu_csr_rd   <= (others => '0');
+    csr_o        <= (others => '0');
+    cp_result(3) <= (others => '0');
+    cp_valid(3)  <= '0';
   end generate;
 
 
@@ -298,35 +298,24 @@ begin
     neorv32_cpu_cp_cfu_inst: entity neorv32.neorv32_cpu_cp_cfu
     port map (
       -- global control --
-      clk_i       => clk_i,                          -- global clock, rising edge
-      rstn_i      => rstn_i,                         -- global reset, low-active, async
-      -- operation control --
-      start_i     => ctrl_i.alu_cp_cfu,              -- operation trigger/strobe
-      active_i    => cfu_active,                     -- operation in progress, CPU is waiting for CFU
-      -- CSR interface --
-      csr_we_i    => cfu_csr_we,                     -- write enable
-      csr_addr_i  => csr_addr_i(1 downto 0),         -- address
-      csr_wdata_i => csr_wdata_i,                    -- write data
-      csr_rdata_o => cfu_csr_rd,                     -- read data
+      clk_i    => clk_i,                          -- global clock, rising edge
+      rstn_i   => rstn_i,                         -- global reset, low-active, async
+      -- operation trigger --
+      start_i  => ctrl_i.alu_cp_cfu,              -- start trigger, single-shot
       -- operands --
-      rtype_i     => ctrl_i.ir_opcode(5),            -- instruction type (R3-type or R4-type)
-      funct3_i    => ctrl_i.ir_funct3,               -- "funct3" bit-field from custom instruction word
-      funct7_i    => ctrl_i.ir_funct12(11 downto 5), -- "funct7" bit-field from custom instruction word
-      rs1_i       => rs1_i,                          -- rf source 1
-      rs2_i       => rs2_i,                          -- rf source 2
-      rs3_i       => rs3_i,                          -- rf source 3
+      type_i   => ctrl_i.ir_opcode(5),            -- instruction type
+      funct3_i => ctrl_i.ir_funct3,               -- "funct3" bit-field
+      funct7_i => ctrl_i.ir_funct12(11 downto 5), -- "funct7" bit-field
+      imm12_i  => ctrl_i.ir_funct12(11 downto 0), -- "imm12" bit-field
+      rs1_i    => rs1_i,                          -- rf source 1
+      rs2_i    => rs2_i,                          -- rf source 2
       -- result and status --
-      result_o    => cfu_res,                        -- operation result
-      valid_o     => cfu_done                        -- result valid, operation done; set one cycle before result_o is valid
+      result_o => cfu_res,                        -- operation result
+      valid_o  => cfu_done                        -- result valid, operation done
     );
 
-    -- CSR proxy --
-    cfu_csr_en    <= '1' when (csr_addr_i(11 downto 2) = csr_cfureg0_c(11 downto 2)) else '0';
-    cfu_csr_we    <= cfu_csr_en and csr_we_i;
-    csr_rdata_cfu <= cfu_csr_rd when (cfu_csr_en = '1') else (others => '0');
-
     -- response proxy --
-    cfu_arbiter: process(rstn_i, clk_i)
+    cfu_proxy: process(rstn_i, clk_i)
     begin
       if (rstn_i = '0') then
         cfu_busy     <= '0';
@@ -337,27 +326,23 @@ begin
         elsif (ctrl_i.alu_cp_cfu = '1') then
           cfu_busy <= '1';
         end if;
-        if (cfu_done = '1') and ((ctrl_i.alu_cp_cfu = '1') or (cfu_busy = '1')) then
+        if (cp_valid(4) = '1') then
           cp_result(4) <= cfu_res;
         else -- output zero if there is no CFU operation
           cp_result(4) <= (others => '0');
         end if;
       end if;
-    end process cfu_arbiter;
-
-    cfu_active  <= ctrl_i.alu_cp_cfu or cfu_busy; -- CFU operation in progress
+    end process cfu_proxy;
     cp_valid(4) <= cfu_done and (ctrl_i.alu_cp_cfu or cfu_busy);
   end generate;
 
   neorv32_cpu_cp_cfu_inst_false:
   if not RISCV_ISA_Zxcfu generate
-    cfu_csr_en    <= '0';
-    cfu_csr_we    <= '0';
-    csr_rdata_cfu <= (others => '0');
-    cfu_busy      <= '0';
-    cfu_active    <= '0';
-    cp_result(4)  <= (others => '0');
-    cp_valid(4)   <= '0';
+    cfu_done     <= '0';
+    cfu_res      <= (others => '0');
+    cfu_busy     <= '0';
+    cp_result(4) <= (others => '0');
+    cp_valid(4)  <= '0';
   end generate;
 
 
@@ -393,7 +378,6 @@ begin
   if RISCV_ISA_Zbkx or RISCV_ISA_Zknh or RISCV_ISA_Zkne or RISCV_ISA_Zknd or RISCV_ISA_Zksh or RISCV_ISA_Zksed generate
     neorv32_cpu_cp_crypto_inst: entity neorv32.neorv32_cpu_cp_crypto
     generic map (
-      EN_ZBKX  => RISCV_ISA_Zbkx,  -- enable crossbar permutation extension
       EN_ZKNH  => RISCV_ISA_Zknh,  -- enable NIST hash extension
       EN_ZKNE  => RISCV_ISA_Zkne,  -- enable NIST AES encryption extension
       EN_ZKND  => RISCV_ISA_Zknd,  -- enable NIST AES decryption extension

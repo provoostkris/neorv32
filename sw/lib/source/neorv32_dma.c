@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -9,10 +9,6 @@
 /**
  * @file neorv32_wdt.c
  * @brief Direct Memory Access Controller (DMA) HW driver source file.
- *
- * @note These functions should only be used if the DMA controller was synthesized (IO_DMA_EN = true).
- *
- * @see https://stnolting.github.io/neorv32/sw/files.html
  */
 
 #include <neorv32.h>
@@ -21,16 +17,45 @@
 /**********************************************************************//**
  * Check if DMA controller was synthesized.
  *
- * @return 0 if DMA was not synthesized, 1 if DMA is available.
+ * @return 0 if DMA was not synthesized, non-zero if DMA is available.
  **************************************************************************/
 int neorv32_dma_available(void) {
 
-  if (NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_DMA)) {
-    return 1;
-  }
-  else {
-    return 0;
-  }
+  return (int)(NEORV32_SYSINFO->SOC & (1 << SYSINFO_SOC_IO_DMA));
+}
+
+
+/**********************************************************************//**
+ * Get DMA descriptor FIFO depth.
+ *
+ * @return FIFO depth (number of entries)
+ **************************************************************************/
+int neorv32_dma_get_descriptor_fifo_depth(void) {
+
+  uint32_t tmp = (NEORV32_DMA->CTRL >> DMA_CTRL_DFIFO_LSB) & 0xf;
+  return (int)(1 << tmp);
+}
+
+
+/**********************************************************************//**
+ * Check if descriptor FIFO is full.
+ *
+ * @return Non-zero if FIFO is full, zero otherwise.
+ **************************************************************************/
+int neorv32_dma_descriptor_fifo_full(void) {
+
+  return (int)(NEORV32_DMA->CTRL & (1 << DMA_CTRL_DFULL));
+}
+
+
+/**********************************************************************//**
+ * Check if descriptor FIFO is empty.
+ *
+ * @return Non-zero if FIFO is empty, zero otherwise.
+ **************************************************************************/
+int neorv32_dma_descriptor_fifo_empty(void) {
+
+  return (int)(NEORV32_DMA->CTRL & (1 << DMA_CTRL_DEMPTY));
 }
 
 
@@ -53,63 +78,61 @@ void neorv32_dma_disable(void) {
 
 
 /**********************************************************************//**
- * Enable memory barrier (fence): issue a FENCE operation when DMA transfer
- * completes  without errors.
+ * Manually clear pending DMA interrupt. This will also clear the
+ * transfer-error and transfer-done status flags.
  **************************************************************************/
-void neorv32_dma_fence_enable(void) {
+void neorv32_dma_irq_ack(void) {
 
-  NEORV32_DMA->CTRL |= (uint32_t)(1 << DMA_CTRL_FENCE);
+  NEORV32_DMA->CTRL |= (uint32_t)(1 << DMA_CTRL_ACK);
 }
 
 
 /**********************************************************************//**
- * Disable memory barrier (fence).
- **************************************************************************/
-void neorv32_dma_fence_disable(void) {
-
-  NEORV32_DMA->CTRL &= ~((uint32_t)(1 << DMA_CTRL_FENCE));
-}
-
-
-/**********************************************************************//**
- * Trigger manual DMA transfer.
+ * Program DMA descriptor.
  *
- * @param[in] base_src Source base address (has to be aligned to source data type!).
- * @param[in] base_dst Destination base address (has to be aligned to destination data type!).
- * @param[in] num Number of elements to transfer (24-bit).
- * @param[in] config Transfer type configuration/commands.
+ * @param[in] base_src Source data base address.
+ * @param[in] base_dst Destination data base address.
+ * @param[in] config Transfer type configuration (#NEORV32_DMA_CONF_enum).
+ *
+ * @return 0 if programming was successful; if the descriptor FIFO does not
+ * provide enough space for the entire descriptor, a negative value is returned
+ * that represents the number of missing FIFO entries.
  **************************************************************************/
-void neorv32_dma_transfer(uint32_t base_src, uint32_t base_dst, uint32_t num, uint32_t config) {
+int neorv32_dma_program(uint32_t src_addr, uint32_t dst_addr, uint32_t config) {
 
-  NEORV32_DMA->CTRL &= ~((uint32_t)(1 << DMA_CTRL_AUTO)); // manual transfer trigger
-  NEORV32_DMA->SRC_BASE = base_src;
-  NEORV32_DMA->DST_BASE = base_dst;
-  NEORV32_DMA->TTYPE    = (num & 0x00ffffffUL) | (config & 0xff000000UL); // trigger transfer
+  if (NEORV32_DMA->CTRL & (1 << DMA_CTRL_DFULL)) { return -3; } // three free entries too few
+  NEORV32_DMA->DESC = src_addr;
+  if (NEORV32_DMA->CTRL & (1 << DMA_CTRL_DFULL)) { return -2; } // two free entries too few
+  NEORV32_DMA->DESC = dst_addr;
+  if (NEORV32_DMA->CTRL & (1 << DMA_CTRL_DFULL)) { return -1; } // one free entry too few
+  NEORV32_DMA->DESC = config;
+  return 0;
 }
 
 
 /**********************************************************************//**
- * Configure automatic DMA transfer (triggered by CPU FIRQ).
+ * Program DMA descriptor (without checking FIFO level).
  *
- * @param[in] base_src Source base address (has to be aligned to source data type!).
- * @param[in] base_dst Destination base address (has to be aligned to destination data type!).
- * @param[in] num Number of elements to transfer (24-bit).
- * @param[in] config Transfer type configuration/commands.
- * @param[in] firq_sel FIRQ trigger select (#NEORV32_CSR_MIP_enum); only FIRQ0..FIRQ15 = 16..31.
- * @param[in] firq_type Trigger on rising-edge (0) or high-level (1) of FIRQ channel.
+ * @warning Descriptor FIFO might overflow. Use with care.
+ *
+ * @param[in] base_src Source data base address.
+ * @param[in] base_dst Destination data base address.
+ * @param[in] config Transfer type configuration (#NEORV32_DMA_CONF_enum).
  **************************************************************************/
-void neorv32_dma_transfer_auto(uint32_t base_src, uint32_t base_dst, uint32_t num, uint32_t config, int firq_sel, int firq_type) {
+void neorv32_dma_program_nocheck(uint32_t src_addr, uint32_t dst_addr, uint32_t config) {
 
-  uint32_t tmp = NEORV32_DMA->CTRL;
-  tmp |= (uint32_t)(1 << DMA_CTRL_AUTO); // automatic transfer trigger
-  tmp &= ~(0xf << DMA_CTRL_FIRQ_SEL_LSB); // clear current FIRQ select
-  tmp |= (uint32_t)((firq_sel & 0xf) << DMA_CTRL_FIRQ_SEL_LSB); // set new FIRQ select
-  tmp |= (uint32_t)((firq_type & 1) << DMA_CTRL_FIRQ_TYPE); // FIRQ trigger type
-  NEORV32_DMA->CTRL = tmp;
+  NEORV32_DMA->DESC = src_addr;
+  NEORV32_DMA->DESC = dst_addr;
+  NEORV32_DMA->DESC = config;
+}
 
-  NEORV32_DMA->SRC_BASE = base_src;
-  NEORV32_DMA->DST_BASE = base_dst;
-  NEORV32_DMA->TTYPE    = (num & 0x00ffffffUL) | (config & 0xff000000UL);
+
+/**********************************************************************//**
+ * Trigger pre-programmed DMA transfer(s)
+ **************************************************************************/
+void neorv32_dma_start(void) {
+
+  NEORV32_DMA->CTRL |= 1 << DMA_CTRL_START;
 }
 
 
@@ -122,33 +145,16 @@ int neorv32_dma_status(void) {
 
   uint32_t tmp = NEORV32_DMA->CTRL;
 
-  if (tmp & (1 << DMA_CTRL_ERROR_WR)) {
-    return DMA_STATUS_ERR_WR; // error during write access
-  }
-  else if (tmp & (1 << DMA_CTRL_ERROR_RD)) {
-    return DMA_STATUS_ERR_RD; // error during read access
+  if (tmp & (1 << DMA_CTRL_ERROR)) {
+    return DMA_STATUS_ERROR; // error during transfer
   }
   else if (tmp & (1 << DMA_CTRL_BUSY)) {
     return DMA_STATUS_BUSY; // transfer in progress
   }
+  else if (tmp & (1 << DMA_CTRL_DONE)) {
+    return DMA_STATUS_DONE; // transfer done
+  }
   else {
     return DMA_STATUS_IDLE; // idle
-  }
-}
-
-
-/**********************************************************************//**
- * Check if a transfer has actually been executed.
- *
- * @return 0 if no transfer was executed, 1 if a transfer has actually been executed.
- * Use neorv32_dma_status(void) to check if there was an error during that transfer.
- **************************************************************************/
-int neorv32_dma_done(void) {
-
-  if (NEORV32_DMA->CTRL & (1 << DMA_CTRL_DONE)) {
-    return 1; // there was a transfer
-  }
-  else {
-    return 0; // no transfer executed
   }
 }

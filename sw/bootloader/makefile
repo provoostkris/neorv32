@@ -1,25 +1,31 @@
-# Bootloader (for BOOTROM) makefile.
+# NEORV32 bootloader makefile
 
-# Minimal RISC-V ISA (E!) only
+# minimal RISC-V ISA
 MARCH = rv32e_zicsr_zifencei
 MABI = ilp32e
 
-# Optimize for minimal size
+# optimize for minimal size
 EFFORT = -Os
 
-# Adjust "rom" memory size and base for BOOTROM
-# Just use a minimal "ram" size that should be available on any platform configuration.
-# Define MAKE_BOOTLOADER for SW library (reduces footprint)
-# Enable link-time-optimization
+# sources and includes
+APP_SRC += $(wildcard ./*.c) $(wildcard ./hal/source/*.c) $(wildcard petit_fatfs/*.c)
+APP_INC += -I . -I ./hal/include -I petit_fatfs
+
+# just use a minimal "ram" size that should be available on any platform configuration
+# [IMPORTANT] adjust the base address to your memory layout
 USER_FLAGS += \
--Wl,--defsym,__neorv32_rom_size=4k \
--Wl,--defsym,__neorv32_rom_base=0xFFE00000 \
 -Wl,--defsym,__neorv32_ram_size=256 \
--DMAKE_BOOTLOADER \
--flto
+-Wl,--defsym,__neorv32_ram_base=0x80000000
 
-# Set path to NEORV32 root directory
+# map to boot ROM and define maximum logical ROM size
+# [note] the physical ROM size depends on the actual bootloader size
+USER_FLAGS += \
+-Wl,--defsym,__neorv32_rom_size=16k \
+-Wl,--defsym,__neorv32_rom_base=0xFFE00000
+
+# define MAKE_BOOTLOADER for bootloader-specific library optimizations and enable link-time-optimization
+USER_FLAGS += -DMAKE_BOOTLOADER -flto
+
+# include the main NEORV32 makefile
 NEORV32_HOME ?= ../..
-
-# Include the main NEORV32 makefile
 include $(NEORV32_HOME)/sw/common/common.mk

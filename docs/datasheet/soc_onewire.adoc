@@ -3,18 +3,25 @@
 ==== One-Wire Serial Interface Controller (ONEWIRE)
 
 [cols="<3,<3,<4"]
-[frame="topbot",grid="none"]
+[grid="none"]
 |=======================
 | Hardware source files:  | neorv32_onewire.vhd |
-| Software driver files:  | neorv32_onewire.c |
-|                         | neorv32_onewire.h |
-| Top entity ports:       | `onewire_i` | 1-bit 1-wire bus sense input
-|                         | `onewire_o` | 1-bit 1-wire bus output (pull low only)
+| Software driver files:  | neorv32_onewire.c   | link:https://stnolting.github.io/neorv32/sw/neorv32__onewire_8c.html[Online software reference (Doxygen)]
+|                         | neorv32_onewire.h   | link:https://stnolting.github.io/neorv32/sw/neorv32__onewire_8h.html[Online software reference (Doxygen)]
+| Top entity ports:       | `onewire_i`         | 1-bit 1-wire bus sense input
+|                         | `onewire_o`         | 1-bit 1-wire bus output (pull low only)
 | Configuration generics: | `IO_ONEWIRE_EN`     | implement ONEWIRE interface controller when `true`
-|                         | `IO_ONEWIRE_FIFO`   | RTX fifo depth, has to be zero or a power of two, min 1
+|                         | `IO_ONEWIRE_FIFO`   | RTX FIFO depth, has to be zero or a power of two, min 1
 | CPU interrupts:         | fast IRQ channel 13 | operation done interrupt (see <<_processor_interrupts>>)
-| Access restrictions:  2+| non-32-bit write accesses are ignored
 |=======================
+
+**Key Features**
+
+* Dallas(R) 1-Wire(TM)-compatible host controller
+* Hardware-based protocol handling (RESET, presence, data, etc.)
+* Fine-grained programmable bus timings
+* Optional data/command FIFO
+* Interrupt based on FIFO status
 
 
 **Overview**
@@ -38,8 +45,8 @@ actual 1-wire bus signal, which is of type `std_logic`; `onewire_o` and `onewire
 .ONEWIRE VHDL Tristate Driver Example
 [source,VHDL]
 ----
-onewire_io   <= '0' when (onewire_o = '0') else 'Z'; -- drive (low)
-onewire_i <= std_ulogic(onewire_io); -- sense
+onewire_io <= '0' when (onewire_o = '0') else 'Z'; -- drive (low)
+onewire_i  <= std_ulogic(onewire_io); -- sense
 ----
 
 
@@ -95,14 +102,16 @@ All bus operations are timed using multiples of this elementary base time.
 [cols="<4,^1,^1,^1,^1"]
 [options="header",grid="rows"]
 |=======================
-| **`ONEWIRE_CTRL_PRSCx`**    | `0b00` | `0b01` | `0b10` | `0b11`
-| Resulting `clock_prescaler` |      2 |      4 |      8 |     64
+| **`ONEWIRE_CTRL_PRSC[2:0]`** | `0b00` | `0b01` | `0b10` | `0b11`
+| Resulting `clock_prescaler`  |      2 |      4 |      8 |     64
 |=======================
 
 Together with the clock divider value (`ONEWIRE_CTRL_PRSCx` bits = `clock_divider`) the base time is defined by the
 following formula:
 
+****
 _**T~base~**_ = (1 / _f~main~[Hz]_) * `clock_prescaler` * (`clock_divider` + 1)
+****
 
 Example:
 
@@ -110,7 +119,9 @@ Example:
 * clock prescaler select = `0b01` -> `clock_prescaler` = 4
 * clock divider `clock_divider` = 249
 
+****
 _**T~base~**_ = (1 / 100000000Hz) * 4 * (249 + 1) = 10000ns = **10µs**
+****
 
 The base time is used to coordinate all bus interactions. Hence, all delays, time slots and points in time are
 quantized as multiples of the base time T~base~. The following images show the two basic operations of the ONEWIRE
@@ -118,13 +129,41 @@ controller: single-bit (0 or 1) transaction and reset with presence detect. Note
 the single-bit operation eight times. The relevant points in time are shown as _absolute_ time points (in multiples of the
 time base T~base~) with the falling edge of the bus as reference points.
 
-[cols="^2,^2"]
-[grid="none"]
-|=======================
-a| image::onewire_data.png[align=center]
-a| image::onewire_reset.png[align=center]
-| Single-bit data transmission (not to scale) | Reset pulse and presence detect (not to scale)
-|=======================
+.Single-bit data transmission (not to scale)
+[wavedrom, format="svg", align="center"]
+----
+{ signal: [
+  { wave: '10x....1.', node: '.........'},
+  {                    node: '.ab......'},
+  {                    node: '.X..c....'},
+  {                    node: '.Y.....d.'},
+  {                    node: '.Z......e'}
+  ],
+  edge: [
+    'a-b t0',
+    'X-c t1',
+    'Y-d t2',
+    'Z-e t3'
+  ]
+}
+----
+
+.Reset pulse and presence detect (not to scale)
+[wavedrom, format="svg", align="center"]
+----
+{ signal: [
+  { wave: '10..x...1', node: '.........'},
+  {                    node: '.f..g....'},
+  {                    node: '.X.. h...'},
+  {                    node: '.Y......i'}
+  ],
+  edge: [
+    'f-g t4',
+    'X-h t5',
+    'Y-i t6',
+  ]
+}
+----
 
 .Data Transmission Timing
 [cols="<2,<6,^3,^3"]
@@ -196,6 +235,6 @@ controller is idle (again) and the data/command FIFO is empty, the interrupt bec
                                   <|`31`    `ONEWIRE_CTRL_BUSY`                             ^| r/- <| operation in progress when set or TX FIFO not empty
 .4+<| `0xfff20004` .4+<| `DCMD` <|`7:0`  `ONEWIRE_DCMD_DATA_MSB : ONEWIRE_DCMD_DATA_LSB` ^| r/w <| receive/transmit data
                                 <|`9:8`  `ONEWIRE_DCMD_CMD_HI : ONEWIRE_DCMD_CMD_LO`     ^| -/w <| operation command LSBs
-                                <|`10`   `ONEWIRE_DCMD_PRESENCE`                         ^| -/w <| bus presence detected
+                                <|`10`   `ONEWIRE_DCMD_PRESENCE`                         ^| r/- <| bus presence detected
                                 <|`31:11` -                                              ^| r/- <| _reserved_, read as zero
 |=======================

@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -9,14 +9,10 @@
 /**
  * @file neorv32_trng.h
  * @brief True Random Number Generator (TRNG) HW driver header file.
- *
- * @note These functions should only be used if the TRNG unit was synthesized (IO_TRNG_EN = true).
- *
- * @see https://stnolting.github.io/neorv32/sw/files.html
  */
 
-#ifndef neorv32_trng_h
-#define neorv32_trng_h
+#ifndef NEORV32_TRNG_H
+#define NEORV32_TRNG_H
 
 #include <stdint.h>
 
@@ -31,7 +27,7 @@ typedef volatile struct __attribute__((packed,aligned(4))) {
   const uint32_t DATA; /**< offset 4: random data register (#NEORV32_TRNG_DATA_enum) */
 } neorv32_trng_t;
 
-/** TRNG module hardware access (#neorv32_trng_t) */
+/** TRNG module hardware handle (#neorv32_trng_t) */
 #define NEORV32_TRNG ((neorv32_trng_t*) (NEORV32_TRNG_BASE))
 
 /** TRNG control register bits */
@@ -56,14 +52,15 @@ enum NEORV32_TRNG_DATA_enum {
  * @name Prototypes
  **************************************************************************/
 /**@{*/
-int  neorv32_trng_available(void);
-void neorv32_trng_enable(void);
-void neorv32_trng_disable(void);
-void neorv32_trng_fifo_clear(void);
-int  neorv32_trng_get_fifo_depth(void);
-int  neorv32_trng_get(uint8_t *data);
-int  neorv32_trng_check_sim_mode(void);
+int     neorv32_trng_available(void);
+void    neorv32_trng_enable(void);
+void    neorv32_trng_disable(void);
+void    neorv32_trng_fifo_clear(void);
+int     neorv32_trng_get_fifo_depth(void);
+int     neorv32_trng_data_avail(void);
+uint8_t neorv32_trng_data_get(void);
+int     neorv32_trng_check_sim_mode(void);
 /**@}*/
 
 
-#endif // neorv32_trng_h
+#endif // NEORV32_TRNG_H

@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2024 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -9,7 +9,6 @@
 
 /**********************************************************************//**
  * @file game_of_life/main.c
- * @author Stephan Nolting
  * @brief Conway's game of life in a UART terminal.
  **************************************************************************/
 
@@ -21,17 +20,17 @@
  **************************************************************************/
 /**@{*/
 /** UART BAUD rate */
-#define BAUD_RATE     19200
+#define BAUD_RATE   (19200)
 /** Universe x size (has to be a multiple of 8) */
-#define NUM_CELLS_X   160
+#define NUM_CELLS_X (160)
 /** Universe y size */
-#define NUM_CELLS_Y   40
+#define NUM_CELLS_Y (40)
 /** Delay between generations in ms */
-#define GEN_DELAY     500
+#define GEN_DELAY   (500)
 /** Symbol for dead cell */
-#define CELL_DEAD  (' ')
+#define CELL_DEAD   (' ')
 /** Symbol for alive cell */
-#define CELL_ALIVE ('#')
+#define CELL_ALIVE  ('#')
 /**@}*/
 
 
@@ -48,6 +47,16 @@ int get_cell(int u, int x, int y);
 int get_neighborhood(int u, int x, int y);
 void print_universe(int u);
 int pop_count(int u);
+
+
+/**********************************************************************//**
+ * Simple bus-wait helper.
+ *
+ * @param[in] time_ms Time in ms to wait (unsigned 32-bit).
+ **************************************************************************/
+void delay_ms(uint32_t time_ms) {
+  neorv32_aux_delay_ms(neorv32_sysinfo_get_clk(), time_ms);
+}
 
 
 /**********************************************************************//**
@@ -79,7 +88,6 @@ int main(void) {
     int u = 0, cell = 0, n = 0;
     int x, y;
     int trng_available = 0;
-    uint8_t trng_data;
 
 
     // initialize universe
@@ -109,19 +117,12 @@ int main(void) {
     neorv32_uart0_char_received_get(); // discard received char
 
 
-    // initialize universe using random data
+    // initialize universe using true random data
     for (x=0; x<NUM_CELLS_X/8; x++) {
       for (y=0; y<NUM_CELLS_Y; y++) {
         if (trng_available) {
-          while (1) {
-            if (neorv32_trng_get(&trng_data)) {
-              continue;
-            }
-            else {
-              break;
-            }
-          }
-          universe[0][x][y] = trng_data; // use data from TRNG
+          while (neorv32_trng_data_avail() == 0);
+          universe[0][x][y] = neorv32_trng_data_get(); // use data from TRNG
         }
         else {
           universe[0][x][y] = (uint8_t)neorv32_aux_xorshift32(); // use data from PRNG
@@ -168,7 +169,7 @@ int main(void) {
       generation++;
 
       // wait GEN_DELAY ms
-      neorv32_cpu_delay_ms(GEN_DELAY);
+      delay_ms(GEN_DELAY);
     }
 
   }
